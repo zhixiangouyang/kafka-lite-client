@@ -10,7 +10,7 @@ public class KafkaSocketClient {
     /**
      * 发送请求并接受Kafka响应
      */
-    public static ByteBuffer sendAndReceive(String brokerHost, int brokerPort, ByteBuffer request) throws Exception{
+    public static ByteBuffer sendAndReceive(String brokerHost, int brokerPort, ByteBuffer request) throws Exception {
         try (Socket socket = new Socket(brokerHost, brokerPort)) {
             socket.setSoTimeout(3000);
 
