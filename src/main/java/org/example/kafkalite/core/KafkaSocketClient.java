@@ -20,6 +20,7 @@ public class KafkaSocketClient {
             // ————发送请求————
             byte[] requestBytes = new byte[request.remaining()];
             request.get(requestBytes);
+            System.out.println("Request bytes: " + bytesToHex(requestBytes)); // TODO：抓包测试
             out.write(requestBytes);
             out.flush();
 
@@ -46,6 +47,15 @@ public class KafkaSocketClient {
             if (r == -1) throw new RuntimeException("stream closed");
             read += r;
         }
+    }
+
+    // TODO：抓包测试用
+    public static String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02x ", b));
+        }
+        return sb.toString();
     }
 
 }

@@ -1,57 +1,55 @@
 package org.example.kafkalite.metadata;
-
-import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
-/**
- * 用于请求metadata数据的编码类
- */
 public class KafkaRequestEncoder {
 
     /**
-     * 构造 MetadataRequest v9 请求头 + 请求体
+     * 编码 MetadataRequest v0（基础版本，无tagged fields）
      */
     public static ByteBuffer encodeMetadataRequest(List<String> topics, int correlationId) {
+        if (topics == null || topics.isEmpty()) {
+            throw new IllegalArgumentException("Topics list cannot be null or empty");
+        }
+
         String clientId = "kafka-lite";
-        short apiKey = 3;
-        short apiVersion = 9;
+        short apiKey = 3;          // MetadataRequest
+        short apiVersion = 0;      // 基础版本，无tagged fields
 
         byte[] clientIdBytes = clientId.getBytes(StandardCharsets.UTF_8);
 
-        // 预估 buffer 大小；足够容纳 header + topics
-        ByteBuffer buffer = ByteBuffer.allocate(4096);
+        // 预估buffer大小
+        int estimatedSize = 4 + 2 + 2 + 4 + 2 + clientIdBytes.length + 4;
+        for (String topic : topics) {
+            if (topic == null) {
+                throw new IllegalArgumentException("Topic name cannot be null");
+            }
+            estimatedSize += 2 + topic.getBytes(StandardCharsets.UTF_8).length;
+        }
 
-        //———————————————————Request Header———————————————————
-        buffer.position(4);
+        ByteBuffer buffer = ByteBuffer.allocate(estimatedSize);
+        buffer.position(4); // 预留长度字段
 
+        // Request Header
         buffer.putShort(apiKey);
         buffer.putShort(apiVersion);
         buffer.putInt(correlationId);
+        buffer.putShort((short) clientIdBytes.length);
+        buffer.put(clientIdBytes);
 
-        buffer.putShort((short) clientIdBytes.length); // clientId长度
-        buffer.put(clientIdBytes);                     // clientId内容
-
-        //———————————————————Request Body———————————————————
         // topics array
         buffer.putInt(topics.size());
         for (String topic : topics) {
             byte[] topicBytes = topic.getBytes(StandardCharsets.UTF_8);
-            buffer.putShort((short) topicBytes.length);// string length
-            buffer.put(topicBytes);                    // string bytes
+            buffer.putShort((short) topicBytes.length);
+            buffer.put(topicBytes);
         }
 
-        // allow_auto_topic_creation(boolean as byte)
-        buffer.put((byte) 1); //true
-        // v9 新增字段
-        buffer.put((byte) 0); // include_cluster_authorized_operations
-        buffer.put((byte) 0); // include_topic_authorized_operations
-        //———————————————————Patch Length———————————————————
+        // Patch total length
         int endPos = buffer.position();
-        int length = endPos - 4;
-        buffer.putInt(0, length);   // 回填长度
-
+        int totalLen = endPos - 4;
+        buffer.putInt(0, totalLen);
         buffer.flip();
         return buffer;
     }
