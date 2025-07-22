@@ -3,6 +3,9 @@ package org.example.kafkalite.protocol;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * 用于发送消息的编码类
+ */
 public class ProduceRequestBuilder {
 
     public static ByteBuffer build(String clientId,
@@ -43,10 +46,18 @@ public class ProduceRequestBuilder {
         // timeout
         buf.putInt(timeoutMs); // 例如 3000
 
-        // [topic_data]
+        // [topic_data] array size
         buf.putInt(1);  // 只有一个topic
 
-        buf.putInt(partition); // partitionId
+        // topic name
+        buf.putShort((short) topicBytes.length);
+        buf.put(topicBytes);
+
+        // partition array size
+        buf.putInt(1); // 只有一个分区
+
+        // partitionId
+        buf.putInt(partition);
 
         // recordBytes
         buf.putInt(recordBytes.length);

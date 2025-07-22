@@ -5,6 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * 用于解析metadata响应的解码类
+ */
 public class MetadataResponseParser {
 
     public static Metadata parse(ByteBuffer buffer) {

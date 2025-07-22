@@ -5,6 +5,9 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+/**
+ * 用于请求metadata数据的编码类
+ */
 public class KafkaRequestEncoder {
 
     /**
@@ -41,7 +44,9 @@ public class KafkaRequestEncoder {
 
         // allow_auto_topic_creation(boolean as byte)
         buffer.put((byte) 1); //true
-
+        // v9 新增字段
+        buffer.put((byte) 0); // include_cluster_authorized_operations
+        buffer.put((byte) 0); // include_topic_authorized_operations
         //———————————————————Patch Length———————————————————
         int endPos = buffer.position();
         int length = endPos - 4;

@@ -3,6 +3,9 @@ package org.example.kafkalite.protocol;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
+/**
+ * 用于组合record批次消息的编码类
+ */
 public class KafkaRecordEncoder {
 
     public static ByteBuffer encodeRecordBatch(String key, String value) {
