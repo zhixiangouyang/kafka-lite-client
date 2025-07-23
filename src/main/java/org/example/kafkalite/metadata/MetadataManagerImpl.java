@@ -24,7 +24,7 @@ public class MetadataManagerImpl implements MetadataManager{
             // 1. 编码 MetadataRequest 请求体
             List<String> topics = new ArrayList<>();
             topics.add(topic);
-            ByteBuffer request = KafkaRequestEncoder.encodeMetadataRequest(topics, 1);
+            ByteBuffer request = MetadataRequestEncoder.encodeMetadataRequest(topics, 1);
 
             // 2. 选一个broker发请求
             String brokerAddress = bootstrapServers.get(0);

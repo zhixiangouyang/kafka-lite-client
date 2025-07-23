@@ -3,7 +3,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
-public class KafkaRequestEncoder {
+public class MetadataRequestEncoder {
 
     /**
      * 编码 MetadataRequest v0（基础版本，无tagged fields）
