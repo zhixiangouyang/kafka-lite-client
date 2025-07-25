@@ -2,18 +2,26 @@ package org.example.kafkalite.metadata;
 
 public class PartitionInfo {
     private final int partitionId;
-    private final int leadId;
+    private final String leaderAddress;
 
-    public PartitionInfo(int partitionId, int leadId) {
+    public PartitionInfo(int partitionId, String leaderAddress) {
         this.partitionId = partitionId;
-        this.leadId = leadId;
+        this.leaderAddress = leaderAddress;
     }
 
     public int getPartitionId() {
         return partitionId;
     }
 
-    public int getLeadId() {
-        return leadId;
+    public String getLeaderAddress() {
+        return leaderAddress;
+    }
+    
+    @Override
+    public String toString() {
+        return "PartitionInfo{" +
+                "partitionId=" + partitionId +
+                ", leaderAddress='" + leaderAddress + '\'' +
+                '}';
     }
 }

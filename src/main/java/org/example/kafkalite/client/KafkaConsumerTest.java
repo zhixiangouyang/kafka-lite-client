@@ -14,14 +14,14 @@ public class KafkaConsumerTest {
         String broker = "localhost:9092";
 
         // 2. 创建消费者配置
-        ConsumerConfig config = new ConsumerConfig.Builder()
-            .enableAutoCommit(true)           // 启用自动提交
-            .autoCommitIntervalMs(5000)       // 自动提交间隔5秒
-            .maxPollRecords(500)              // 单次最多拉取500条消息
-            .fetchMaxBytes(1024 * 1024)       // 单次最多拉取1MB数据
-            .maxRetries(3)                    // 最大重试次数
-            .retryBackoffMs(1000)            // 重试间隔1秒
-            .build();
+        ConsumerConfig config = new ConsumerConfig();
+        config.setEnableAutoCommit(true);           // 启用自动提交
+        config.setAutoCommitIntervalMs(5000);       // 自动提交间隔5秒
+        config.setMaxPollRecords(500);              // 单次最多拉取500条消息
+        config.setFetchMaxBytes(1024 * 1024);       // 单次最多拉取1MB数据
+        config.setMaxRetries(3);                    // 最大重试次数
+        config.setRetryBackoffMs(1000);             // 重试间隔1秒
+        config.setHeartbeatIntervalMs(3000);        // 心跳间隔3秒
 
         // 3. 创建消费者实例
         KafkaLiteConsumer consumer = new KafkaLiteConsumerImpl(
@@ -32,7 +32,7 @@ public class KafkaConsumerTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("test-topic"));
+            consumer.subscribe(Arrays.asList("kafka-lite-topic"));
 
             System.out.println("开始消费消息...");
             System.out.println("按 Ctrl+C 停止消费");

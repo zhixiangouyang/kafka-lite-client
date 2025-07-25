@@ -5,6 +5,7 @@ import org.example.kafkalite.metadata.MetadataManagerImpl;
 import org.example.kafkalite.monitor.MetricsCollector;
 import org.example.kafkalite.protocol.FetchRequestBuilder;
 import org.example.kafkalite.protocol.FetchResponseParser;
+import org.example.kafkalite.protocol.SyncGroupResponseParser;
 import org.example.kafkalite.core.KafkaSocketClient;
 
 import java.nio.ByteBuffer;
@@ -17,10 +18,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
     private final List<String> bootstrapServers;
     private final String groupId;
+    private final String clientId;
     private final MetadataManager metadataManager;
     private final OffsetManager offsetManager;
     private final ConsumerConfig config;
     private final MetricsCollector metricsCollector;
+    private final ConsumerCoordinator coordinator;
     private List<String> subscribedTopics = new ArrayList<>();
     private final Map<String, Map<Integer, String>> topicPartitionLeaders = new HashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -30,9 +33,11 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.groupId = groupId;
         this.bootstrapServers = bootstrapServers;
         this.config = config;
+        this.clientId = "kafka-lite-" + UUID.randomUUID().toString().substring(0, 8);
         this.metadataManager = new MetadataManagerImpl(bootstrapServers);
         this.offsetManager = new OffsetManager(groupId, bootstrapServers);
         this.metricsCollector = new MetricsCollector();
+        this.coordinator = new ConsumerCoordinator(clientId, groupId, config);
         this.scheduler = Executors.newScheduledThreadPool(1);
 
         // 如果启用了自动提交，启动定时任务
@@ -49,10 +54,15 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
     @Override
     public void subscribe(List<String> topics) {
         this.subscribedTopics = topics;
+        
+        // 刷新元数据
         for (String topic : topics) {
             metadataManager.refreshMetadata(topic);
             topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
         }
+        
+        // 初始化消费者组
+        coordinator.initializeGroup(topics);
     }
 
     @Override
@@ -65,17 +75,26 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         List<ConsumerRecord> allRecords = new ArrayList<>();
         
         try {
-            for (String topic : subscribedTopics) {
+            // 获取分配的分区
+            List<PartitionAssignment> assignments = coordinator.getAssignments();
+            if (assignments == null || assignments.isEmpty()) {
+                return allRecords;
+            }
+            
+            // 按分配的分区拉取消息
+            for (PartitionAssignment assignment : assignments) {
+                if (allRecords.size() >= config.getMaxPollRecords()) {
+                    break;
+                }
+
+                String topic = assignment.getTopic();
+                int partition = assignment.getPartition();
                 Map<Integer, String> partitionLeaders = topicPartitionLeaders.get(topic);
                 if (partitionLeaders == null) continue;
 
-                for (Map.Entry<Integer, String> entry : partitionLeaders.entrySet()) {
-                    if (allRecords.size() >= config.getMaxPollRecords()) {
-                        break;
-                    }
+                String broker = partitionLeaders.get(partition);
+                if (broker == null) continue;
 
-                    int partition = entry.getKey();
-                    String broker = entry.getValue();
                     String[] parts = broker.split(":");
                     String host = parts[0];
                     int port = Integer.parseInt(parts[1]);
@@ -85,7 +104,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                     while (retryCount < config.getMaxRetries()) {
                         try {
                             ByteBuffer fetchRequest = FetchRequestBuilder.build(
-                                "kafka-lite",
+                            clientId,
                                 topic,
                                 partition,
                                 offset,
@@ -116,7 +135,6 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                                 } catch (InterruptedException ie) {
                                     Thread.currentThread().interrupt();
                                     throw new RuntimeException("Interrupted while retrying", ie);
-                                }
                             }
                         }
                     }
@@ -182,9 +200,12 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                 if (config.isEnableAutoCommit()) {
                     commitSync();
                 }
+                
+                // 关闭协调者
+                coordinator.close();
             } finally {
                 // 清理资源
-                subscribedTopics.clear();
+                subscribedTopics = new ArrayList<>();
                 topicPartitionLeaders.clear();
             }
         }
