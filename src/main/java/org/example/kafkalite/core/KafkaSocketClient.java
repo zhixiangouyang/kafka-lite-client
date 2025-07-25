@@ -8,7 +8,7 @@ import java.nio.ByteBuffer;
 
 public class KafkaSocketClient {
     public static ByteBuffer sendAndReceive(String host, int port, ByteBuffer request) {
-        System.out.println("[KafkaSocketClient] Connecting to " + host + ":" + port);
+        // System.out.println("[KafkaSocketClient] Connecting to " + host + ":" + port);
         
         Socket socket = null;
         try {
@@ -21,14 +21,14 @@ public class KafkaSocketClient {
             request.get(requestBytes);
             out.write(requestBytes);
             out.flush();
-            System.out.println("[KafkaSocketClient] Sent " + requestBytes.length + " bytes");
+            // System.out.println("[KafkaSocketClient] Sent " + requestBytes.length + " bytes");
             
             // 读取响应大小
             InputStream in = socket.getInputStream();
             byte[] sizeBuf = new byte[4];
             readFully(in, sizeBuf);
             int size = ByteBuffer.wrap(sizeBuf).getInt();
-            System.out.println("[KafkaSocketClient] Response size: " + size + " bytes");
+            // System.out.println("[KafkaSocketClient] Response size: " + size + " bytes");
             
             if (size < 0 || size > 10 * 1024 * 1024) { // 最大10MB
                 throw new IllegalArgumentException("Invalid response size: " + size);
@@ -40,7 +40,7 @@ public class KafkaSocketClient {
             readFully(in, responseBuf, 4, size);
             
             ByteBuffer response = ByteBuffer.wrap(responseBuf);
-            System.out.println("[KafkaSocketClient] Received response successfully");
+            // System.out.println("[KafkaSocketClient] Received response successfully");
             return response;
             
         } catch (Exception e) {

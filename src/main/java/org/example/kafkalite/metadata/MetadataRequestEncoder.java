@@ -9,7 +9,7 @@ public class MetadataRequestEncoder {
      * 编码 MetadataRequest v0（基础版本，无tagged fields）
      */
     public static ByteBuffer encodeMetadataRequest(List<String> topics, int correlationId) {
-        System.out.println("[MetadataRequestEncoder] Encoding request for topics: " + topics);
+        // 注释掉所有System.out.println日志。
         
         // 计算总大小
         int totalSize = 0;
@@ -62,7 +62,7 @@ public class MetadataRequestEncoder {
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
         buffer.rewind();
-        System.out.println("[MetadataRequestEncoder] Request bytes: " + bytesToHex(bytes));
+        // System.out.println("[MetadataRequestEncoder] Request bytes: " + bytesToHex(bytes));
         
         return buffer;
     }

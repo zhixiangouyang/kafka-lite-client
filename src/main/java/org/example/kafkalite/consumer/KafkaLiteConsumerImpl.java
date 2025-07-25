@@ -73,80 +73,76 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
 
         long startTime = System.currentTimeMillis();
         List<ConsumerRecord> allRecords = new ArrayList<>();
-        
+        System.out.println("[Poll] 开始拉取消息...");
+        List<PartitionAssignment> assignments = coordinator.getAssignments();
+        System.out.println("[Poll] 当前分区分配: " + assignments);
         try {
             // 获取分配的分区
-            List<PartitionAssignment> assignments = coordinator.getAssignments();
             if (assignments == null || assignments.isEmpty()) {
+                System.out.println("[Poll] 当前无分区分配，返回空结果");
                 return allRecords;
             }
-            
             // 按分配的分区拉取消息
             for (PartitionAssignment assignment : assignments) {
                 if (allRecords.size() >= config.getMaxPollRecords()) {
                     break;
                 }
-
                 String topic = assignment.getTopic();
                 int partition = assignment.getPartition();
                 Map<Integer, String> partitionLeaders = topicPartitionLeaders.get(topic);
                 if (partitionLeaders == null) continue;
-
                 String broker = partitionLeaders.get(partition);
                 if (broker == null) continue;
-
-                    String[] parts = broker.split(":");
-                    String host = parts[0];
-                    int port = Integer.parseInt(parts[1]);
-                    long offset = offsetManager.getOffset(topic, partition);
-
-                    int retryCount = 0;
-                    while (retryCount < config.getMaxRetries()) {
-                        try {
-                            ByteBuffer fetchRequest = FetchRequestBuilder.build(
+                String[] parts = broker.split(":");
+                String host = parts[0];
+                int port = Integer.parseInt(parts[1]);
+                long offset = offsetManager.getOffset(topic, partition);
+                int retryCount = 0;
+                while (retryCount < config.getMaxRetries()) {
+                    try {
+                        ByteBuffer fetchRequest = FetchRequestBuilder.build(
                             clientId,
-                                topic,
-                                partition,
-                                offset,
-                                config.getFetchMaxBytes(),
-                                1
-                            );
-
-                            ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, fetchRequest);
-                            List<ConsumerRecord> records = FetchResponseParser.parse(response);
-                            allRecords.addAll(records);
-
-                            // 更新offset
-                            if (!records.isEmpty()) {
-                                long lastOffset = records.get(records.size() - 1).getOffset();
-                                offsetManager.updateOffset(topic, partition, lastOffset + 1);
-                            }
-                            break;
-                        } catch (Exception e) {
-                            retryCount++;
-                            if (retryCount >= config.getMaxRetries()) {
-                                System.err.println("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries");
-                                // 处理leader切换
-                                metadataManager.refreshMetadata(topic);
-                                topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
-                            } else {
-                                try {
-                                    Thread.sleep(config.getRetryBackoffMs());
-                                } catch (InterruptedException ie) {
-                                    Thread.currentThread().interrupt();
-                                    throw new RuntimeException("Interrupted while retrying", ie);
+                            topic,
+                            partition,
+                            offset,
+                            config.getFetchMaxBytes(),
+                            1
+                        );
+                        ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, fetchRequest);
+                        List<ConsumerRecord> records = FetchResponseParser.parse(response);
+                        allRecords.addAll(records);
+                        if (!records.isEmpty()) {
+                            long lastOffset = records.get(records.size() - 1).getOffset();
+                            System.out.printf("[Poll] topic=%s, partition=%d, fetched=%d, lastOffset=%d%n",
+                                topic, partition, records.size(), lastOffset);
+                            offsetManager.updateOffset(topic, partition, lastOffset + 1);
+                        } else {
+                            System.out.printf("[Poll] topic=%s, partition=%d, fetched=0%n", topic, partition);
+                        }
+                        break;
+                    } catch (Exception e) {
+                        retryCount++;
+                        if (retryCount >= config.getMaxRetries()) {
+                            System.err.println("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries");
+                            metadataManager.refreshMetadata(topic);
+                            topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
+                        } else {
+                            try {
+                                Thread.sleep(config.getRetryBackoffMs());
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                throw new RuntimeException("Interrupted while retrying", ie);
                             }
                         }
                     }
                 }
             }
         } finally {
-            // 记录监控指标
             long endTime = System.currentTimeMillis();
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_POLL);
             metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_POLL, endTime - startTime);
+            System.out.printf("[Poll] 本次总共拉取消息数: %d\n", allRecords.size());
         }
-
         return allRecords;
     }
 

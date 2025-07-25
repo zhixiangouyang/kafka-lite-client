@@ -16,13 +16,28 @@ public class FetchResponseParser {
     public static List<ConsumerRecord> parse(ByteBuffer buffer) {
         List<ConsumerRecord> records = new ArrayList<>();
 
+        // 打印响应前32字节和剩余字节数
+        int previewLen = Math.min(buffer.remaining(), 32);
+        byte[] preview = new byte[previewLen];
+        buffer.mark();
+        buffer.get(preview);
+        buffer.reset();
+        System.out.print("[FetchResponseParser] 响应前32字节: ");
+        for (byte b : preview) {
+            System.out.printf("%02x ", b);
+        }
+        System.out.printf(" 剩余字节: %d\n", buffer.remaining());
+
+        // 跳过total length字段
+        buffer.getInt();
         int correlationId = buffer.getInt();  // 响应头
 
-        int topicCount = buffer.getInt();
+        int topicCount = buffer.getInt(); // int32
+        System.out.printf("[FetchResponseParser] topicCount=%d\n", topicCount);
         for (int i = 0; i < topicCount; i++) {
-            String topic =readString(buffer);
-
-            int partitionCount = buffer.getInt();
+            String topic = readString(buffer);
+            int partitionCount = buffer.getInt(); // 必须用int32
+            System.out.printf("[FetchResponseParser] topic=%s, partitionCount=%d\n", topic, partitionCount);
             for (int j = 0; j < partitionCount; j++) {
                 int partition = buffer.getInt();
                 short errorCode = buffer.getShort();
@@ -30,6 +45,8 @@ public class FetchResponseParser {
 
                 int messageSetSize = buffer.getInt();
                 int messageSetEnd = buffer.position() + messageSetSize;
+                System.out.printf("[FetchResponseParser] topic=%s, partition=%d, messageSetSize=%d, bufferPos=%d\n",
+                    topic, partition, messageSetSize, buffer.position());
 
                 while (buffer.position() < messageSetEnd) {
                     long offset = buffer.getLong();
@@ -58,6 +75,9 @@ public class FetchResponseParser {
                         value = new String(valueBytes, StandardCharsets.UTF_8);
                     }
 
+                    System.out.printf("[FetchResponseParser] offset=%d, messageSize=%d, keyLen=%d, valueLen=%d\n",
+                        offset, messageSize, keyLen, valueLen);
+
                     records.add(new ConsumerRecord(topic, partition, offset, key, value));
 
                     // 跳到下一个消息
@@ -69,10 +89,13 @@ public class FetchResponseParser {
     }
 
     private static String readString(ByteBuffer buffer) {
+        int posBefore = buffer.position();
         short len = buffer.getShort();
         if (len < 0) return null;
         byte[] bytes = new byte[len];
         buffer.get(bytes);
-        return new String(bytes, StandardCharsets.UTF_8);
+        String str = new String(bytes, StandardCharsets.UTF_8);
+        System.out.printf("[readString] posBefore=%d, len=%d, posAfter=%d, str=%s\n", posBefore, len, buffer.position(), str);
+        return str;
     }
 }

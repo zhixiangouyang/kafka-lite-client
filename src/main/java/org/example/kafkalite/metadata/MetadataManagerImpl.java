@@ -21,7 +21,7 @@ public class MetadataManagerImpl implements MetadataManager {
     @Override
     public void refreshMetadata(String topic) {
         try {
-            System.out.println("[MetadataManagerImpl] Refreshing metadata for topic: " + topic);
+            // System.out.println("[MetadataManagerImpl] Refreshing metadata for topic: " + topic);
             
             // 1. 编码 MetadataRequest 请求体
             List<String> topics = new ArrayList<>();
@@ -33,14 +33,14 @@ public class MetadataManagerImpl implements MetadataManager {
             String[] parts = brokerAddress.split(":");
             String host = parts[0];
             int port = Integer.parseInt(parts[1]);
-            System.out.println("[MetadataManagerImpl] Sending request to " + host + ":" + port);
+            // System.out.println("[MetadataManagerImpl] Sending request to " + host + ":" + port);
 
             // 3. 使用Socket 发送并接收Kafka响应
             ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, request);
 
             // 4. 解析响应
             Metadata metadata = MetadataResponseParser.parse(response);
-            System.out.println("[MetadataManagerImpl] Received metadata: " + metadata);
+            // System.out.println("[MetadataManagerImpl] Received metadata: " + metadata);
 
             // 5. 缓存更新
             brokerMap.clear();
@@ -49,13 +49,13 @@ public class MetadataManagerImpl implements MetadataManager {
             Map<Integer, String> leaders = metadata.getPartitionLeaders(topic);
             if (leaders != null) {
                 topicPartitionLeaders.put(topic, leaders);
-                System.out.println("[MetadataManagerImpl] Updated partition leaders for topic " + topic + ": " + leaders);
+                // System.out.println("[MetadataManagerImpl] Updated partition leaders for topic " + topic + ": " + leaders);
             } else {
-                System.err.println("[MetadataManagerImpl] No partition leaders found for topic: " + topic);
+                // System.err.println("[MetadataManagerImpl] No partition leaders found for topic: " + topic);
             }
 
         } catch (Exception e) {
-            System.err.println("[MetadataManagerImpl] Failed to refresh metadata: " + e.getMessage());
+            // System.err.println("[MetadataManagerImpl] Failed to refresh metadata: " + e.getMessage());
             throw new RuntimeException("Failed to refresh metadata: " + e.getMessage(), e);
         }
     }
