@@ -17,10 +17,15 @@ public class OffsetManager {
     private final List<String> bootstrapServers;
     // topic -> partition -> offset
     private final Map<String, Map<Integer, Long>> offsets = new HashMap<>();
+    private ConsumerCoordinator coordinator;
 
     public OffsetManager(String groupId, List<String> bootstrapServers) {
         this.groupId = groupId;
         this.bootstrapServers = bootstrapServers;
+    }
+
+    public void setCoordinator(ConsumerCoordinator coordinator) {
+        this.coordinator = coordinator;
     }
 
     // 获取当前offset
@@ -39,11 +44,15 @@ public class OffsetManager {
 
     // 同步提交
     public synchronized void commitSync() {
+        commitSync(-1, "");
+    }
+    // v2协议重载
+    public synchronized void commitSync(int generationId, String memberId) {
         try {
             System.out.println("[DEBUG] offsets to commit: " + offsets);
-            // 1. 构造 OffsetCommitRequest
+            // 1. 构造 OffsetCommitRequest v2
             ByteBuffer request = OffsetCommitRequestBuilder.build(
-                    groupId, offsets, 1, "kafka-ite"
+                    groupId, offsets, 1, "kafka-ite", generationId, memberId, -1L
             );
             // 2. 选一个 broker 发送
             String brokerAddress = bootstrapServers.get(0);

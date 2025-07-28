@@ -38,6 +38,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.offsetManager = new OffsetManager(groupId, bootstrapServers);
         this.metricsCollector = new MetricsCollector();
         this.coordinator = new ConsumerCoordinator(clientId, groupId, config);
+        this.offsetManager.setCoordinator(this.coordinator);
         this.scheduler = Executors.newScheduledThreadPool(1);
 
         // 如果启用了自动提交，启动定时任务
@@ -180,7 +181,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
 
         long startTime = System.currentTimeMillis();
         try {
-            offsetManager.commitSync();
+            offsetManager.commitSync(coordinator.getGenerationId(), coordinator.getMemberId());
         } finally {
             long endTime = System.currentTimeMillis();
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_COMMIT);
