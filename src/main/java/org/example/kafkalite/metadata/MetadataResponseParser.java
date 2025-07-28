@@ -19,7 +19,7 @@ public class MetadataResponseParser {
             
             // 读取correlationId
         int correlationId = buffer.getInt();
-            
+
             // 解析brokers数组
         int brokerCount = buffer.getInt();
             if (brokerCount < 0 || brokerCount > 1000) {
@@ -111,7 +111,7 @@ public class MetadataResponseParser {
                 } else {
                     // System.err.printf("[MetadataResponseParser] Skipping topic %s due to error: %d%n", 
                     //         topic, errorCode);
-                }
+    }
             }
             
             // System.out.println("[MetadataResponseParser] Parsing completed successfully");

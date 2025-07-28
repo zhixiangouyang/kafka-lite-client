@@ -63,6 +63,15 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         
         // 初始化消费者组
         coordinator.initializeGroup(topics);
+        // 新增：获取分区列表并拉取 group offset
+        Map<String, List<Integer>> topicPartitions = new HashMap<>();
+        for (String topic : topics) {
+            Map<Integer, String> leaders = topicPartitionLeaders.get(topic);
+            if (leaders != null) {
+                topicPartitions.put(topic, new ArrayList<>(leaders.keySet()));
+            }
+        }
+        offsetManager.fetchCommittedOffsets(topics, topicPartitions);
     }
 
     @Override
@@ -100,6 +109,9 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                 int retryCount = 0;
                 while (retryCount < config.getMaxRetries()) {
                     try {
+                        System.out.printf("[Poll] 拉取参数: topic=%s, partition=%d, offset=%d, broker=%s:%d%n",
+                            topic, partition, offset, host, port);
+
                         ByteBuffer fetchRequest = FetchRequestBuilder.build(
                             clientId,
                             topic,
@@ -110,17 +122,27 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                         );
                         ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, fetchRequest);
                         List<ConsumerRecord> records = FetchResponseParser.parse(response);
+                        System.out.printf("[Poll] 拉取到 records.size()=%d\n", records.size());
                         allRecords.addAll(records);
+                        System.out.printf("[Poll] allRecords.size()=%d\n", allRecords.size());
                         if (!records.isEmpty()) {
                             long lastOffset = records.get(records.size() - 1).getOffset();
-                            System.out.printf("[Poll] topic=%s, partition=%d, fetched=%d, lastOffset=%d%n",
-                                topic, partition, records.size(), lastOffset);
+                            // 打印所有offset
+                            System.out.print("[Poll] 本批次所有offset: ");
+                            for (ConsumerRecord r : records) {
+                                System.out.print(r.getOffset() + ", ");
+                            }
+                            System.out.println();
+                            System.out.printf("[DEBUG] poll: updateOffset topic=%s, partition=%d, offset=%d\n", topic, partition, lastOffset + 1);
                             offsetManager.updateOffset(topic, partition, lastOffset + 1);
+                            System.out.println("[DEBUG] poll: updateOffset called");
                         } else {
                             System.out.printf("[Poll] topic=%s, partition=%d, fetched=0%n", topic, partition);
                         }
                         break;
                     } catch (Exception e) {
+                        System.err.println("[Poll] 拉取异常: " + e.getMessage());
+                        e.printStackTrace();
                         retryCount++;
                         if (retryCount >= config.getMaxRetries()) {
                             System.err.println("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries");
@@ -142,6 +164,10 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_POLL);
             metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_POLL, endTime - startTime);
             System.out.printf("[Poll] 本次总共拉取消息数: %d\n", allRecords.size());
+            // 自动提交 offset
+            System.out.println("[Poll] 自动提交 offset ...");
+            commitSync();
+            System.out.println("[Poll] offset 提交完成");
         }
         return allRecords;
     }

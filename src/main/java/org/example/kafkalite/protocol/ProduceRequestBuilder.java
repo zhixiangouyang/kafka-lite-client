@@ -9,12 +9,12 @@ import java.nio.charset.StandardCharsets;
 public class ProduceRequestBuilder {
 
     public static ByteBuffer build(String clientId,
-                                 String topic,
-                                 int partition,
-                                 ByteBuffer recordBatch,
-                                 short acks,
-                                 int timeoutMs,
-                                 int correlationId) {
+                                   String topic,
+                                   int partition,
+                                   ByteBuffer recordBatch,
+                                   short acks,
+                                   int timeoutMs,
+                                   int correlationId) {
         byte[] clientBytes = clientId.getBytes(StandardCharsets.UTF_8);
         byte[] topicBytes = topic.getBytes(StandardCharsets.UTF_8);
         byte[] recordBytes = new byte[recordBatch.remaining()];

@@ -27,6 +27,8 @@ public class OffsetCommitRequestBuilder {
             String topic = entry.getKey();
             Map<Integer, Long> partitionMap = entry.getValue();
 
+            putString(buffer, topic); // 修复：必须写入topic字段
+
             // partitions array
             buffer.putInt(partitionMap.size());
             for (Map.Entry<Integer, Long> paritionEntry : partitionMap.entrySet()) {
@@ -41,6 +43,16 @@ public class OffsetCommitRequestBuilder {
         int totalLen = endPos - 4;
         buffer.putInt(0, totalLen);
         buffer.flip();
+
+        // 打印请求字节流
+        byte[] reqBytes = new byte[buffer.remaining()];
+        buffer.mark();
+        buffer.get(reqBytes);
+        buffer.reset();
+        System.out.print("[OffsetCommitRequestBuilder] 请求字节流: ");
+        for (byte b : reqBytes) System.out.printf("%02x ", b);
+        System.out.println();
+
         return buffer;
     }
 
@@ -49,8 +61,8 @@ public class OffsetCommitRequestBuilder {
             buffer.putShort((short) -1);
         } else {
             byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-            buffer.putShort((short) s.length());
-            buffer.get(bytes);
+            buffer.putShort((short) bytes.length);
+            buffer.put(bytes);
         }
     }
 }

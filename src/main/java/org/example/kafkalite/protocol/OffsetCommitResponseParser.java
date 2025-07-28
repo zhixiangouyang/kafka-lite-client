@@ -11,6 +11,7 @@ public class OffsetCommitResponseParser {
      */
     public static Map<String, Map<Integer, Short>> parse(ByteBuffer buffer) {
         Map<String, Map<Integer, Short>> result = new HashMap<>();
+        buffer.getInt(); // 跳过total length字段
         int correlationId = buffer.getInt();
         int topicCount = buffer.getInt();
         for (int i = 0; i < topicCount; i++) {
