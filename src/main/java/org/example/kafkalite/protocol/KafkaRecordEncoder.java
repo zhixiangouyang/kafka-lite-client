@@ -15,11 +15,23 @@ public class KafkaRecordEncoder {
 
     // Kafka默认消息大小限制，通常为1MB
     private static final int MAX_MESSAGE_BYTES = 1024 * 1024;
+    // 单条消息大小警告阈值
+    private static final int MESSAGE_SIZE_WARNING_THRESHOLD = 100 * 1024; // 100KB
 
     public static ByteBuffer encodeRecordBatch(String key, String value) {
         byte[] keyBytes = key != null ? key.getBytes(StandardCharsets.UTF_8) : null;
         byte[] valueBytes = value != null ? value.getBytes(StandardCharsets.UTF_8) : null;
-        long timestamp = System.currentTimeMillis();
+        
+        // 检查消息大小
+        int messageSize = 1 + 1; // magic + attributes
+        messageSize += 4 + (keyBytes != null ? keyBytes.length : 0); // key
+        messageSize += 4 + (valueBytes != null ? valueBytes.length : 0); // value
+        
+        // 如果消息太大，打印警告
+        if (messageSize > MESSAGE_SIZE_WARNING_THRESHOLD) {
+            System.out.printf("警告: 消息大小(%d字节)超过警告阈值(%d字节)%n", 
+                messageSize, MESSAGE_SIZE_WARNING_THRESHOLD);
+        }
 
         // v0 消息格式：
         // offset: int64
@@ -29,11 +41,6 @@ public class KafkaRecordEncoder {
         // attributes: int8 (0 for no compression)
         // key: bytes (int32 + data)
         // value: bytes (int32 + data)
-
-        // 计算消息大小
-        int messageSize = 1 + 1; // magic + attributes
-        messageSize += 4 + (keyBytes != null ? keyBytes.length : 0); // key
-        messageSize += 4 + (valueBytes != null ? valueBytes.length : 0); // value
 
         ByteBuffer buf = ByteBuffer.allocate(8 + 4 + 4 + messageSize); // offset + size + crc + message
 
@@ -129,6 +136,138 @@ public class KafkaRecordEncoder {
             ByteBuffer duplicate = message.duplicate();
             duplicate.rewind(); // 确保position在开始位置
             batchBuffer.put(duplicate);
+        }
+        
+        batchBuffer.flip();
+        return batchBuffer;
+    }
+    
+    /**
+     * 优化版批量编码 - 直接构建批量消息，减少中间ByteBuffer的创建
+     * 适用于发送大量小消息的场景
+     */
+    public static ByteBuffer encodeBatchMessagesOptimized(List<ProducerRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return ByteBuffer.allocate(0);
+        }
+        
+        if (records.size() == 1) {
+            ProducerRecord record = records.get(0);
+            return encodeRecordBatch(record.getKey(), record.getValue());
+        }
+        
+        // 首先计算总大小
+        int totalSize = 0;
+        int validCount = 0;
+        
+        // 预分配数组存储每条消息的信息
+        byte[][] keyBytesArray = new byte[records.size()][];
+        byte[][] valueBytesArray = new byte[records.size()][];
+        int[] messageSizes = new int[records.size()];
+        
+        for (int i = 0; i < records.size(); i++) {
+            ProducerRecord record = records.get(i);
+            byte[] keyBytes = record.getKey() != null ? record.getKey().getBytes(StandardCharsets.UTF_8) : null;
+            byte[] valueBytes = record.getValue() != null ? record.getValue().getBytes(StandardCharsets.UTF_8) : null;
+            
+            // 计算单条消息大小
+            int messageSize = 1 + 1; // magic + attributes
+            messageSize += 4 + (keyBytes != null ? keyBytes.length : 0); // key
+            messageSize += 4 + (valueBytes != null ? valueBytes.length : 0); // value
+            
+            // 每条消息的总大小包括offset(8) + size(4) + crc(4) + message内容
+            int totalMessageSize = 8 + 4 + 4 + messageSize;
+            
+            // 检查单条消息是否超过限制
+            if (totalMessageSize > MAX_MESSAGE_BYTES) {
+                System.err.println("警告: 消息大小(" + totalMessageSize + "字节)超过限制(" + MAX_MESSAGE_BYTES + "字节)，已跳过");
+                continue;
+            }
+            
+            // 检查累计大小是否超过限制
+            if (totalSize + totalMessageSize > MAX_MESSAGE_BYTES) {
+                // 如果添加此消息会超过限制，停止添加
+                System.err.println("警告: 批量消息累计大小将超过限制(" + MAX_MESSAGE_BYTES + "字节)，剩余消息将在下一批次发送");
+                break;
+            }
+            
+            // 存储消息信息
+            keyBytesArray[validCount] = keyBytes;
+            valueBytesArray[validCount] = valueBytes;
+            messageSizes[validCount] = messageSize;
+            
+            totalSize += totalMessageSize;
+            validCount++;
+        }
+        
+        // 如果没有有效消息，返回空缓冲区
+        if (validCount == 0) {
+            return ByteBuffer.allocate(0);
+        }
+        
+        // 分配足够大的缓冲区
+        ByteBuffer batchBuffer = ByteBuffer.allocate(totalSize);
+        
+        // 直接构建批量消息
+        for (int i = 0; i < validCount; i++) {
+            byte[] keyBytes = keyBytesArray[i];
+            byte[] valueBytes = valueBytesArray[i];
+            int messageSize = messageSizes[i];
+            
+            // offset (会被broker重写)
+            batchBuffer.putLong(0L);
+            
+            // message size
+            batchBuffer.putInt(messageSize + 4); // 加4是因为要包含crc
+            
+            // 记住crc位置
+            int crcPosition = batchBuffer.position();
+            batchBuffer.putInt(0); // 占位，之后回填
+            
+            // 记住消息开始位置
+            int messageStart = batchBuffer.position();
+            
+            // message
+            batchBuffer.put((byte) 0); // magic = 0
+            batchBuffer.put((byte) 0); // attributes = 0 (no compression)
+            
+            // key
+            if (keyBytes != null) {
+                batchBuffer.putInt(keyBytes.length);
+                batchBuffer.put(keyBytes);
+            } else {
+                batchBuffer.putInt(-1);
+            }
+            
+            // value
+            if (valueBytes != null) {
+                batchBuffer.putInt(valueBytes.length);
+                batchBuffer.put(valueBytes);
+            } else {
+                batchBuffer.putInt(-1);
+            }
+            
+            // 计算并回填crc
+            int messageEnd = batchBuffer.position();
+            byte[] messageBytes = new byte[messageEnd - messageStart];
+            
+            // 保存当前位置
+            int currentPos = batchBuffer.position();
+            
+            // 读取消息内容用于计算CRC
+            batchBuffer.position(messageStart);
+            batchBuffer.get(messageBytes);
+            
+            // 计算CRC
+            CRC32 crc32 = new CRC32();
+            crc32.update(messageBytes);
+            
+            // 回填CRC
+            batchBuffer.position(crcPosition);
+            batchBuffer.putInt((int) crc32.getValue());
+            
+            // 恢复位置
+            batchBuffer.position(currentPos);
         }
         
         batchBuffer.flip();

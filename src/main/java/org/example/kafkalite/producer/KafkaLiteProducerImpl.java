@@ -312,8 +312,8 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     }
     
     private ByteBuffer buildRecordBatch(List<ProducerRecord> records) {
-        // 使用批量编码功能
-        return KafkaRecordEncoder.encodeBatchMessages(records);
+        // 使用优化版批量编码功能，适合处理1KB大小的消息
+        return KafkaRecordEncoder.encodeBatchMessagesOptimized(records);
     }
 
     private void doSend(ProducerRecord record) throws Exception {

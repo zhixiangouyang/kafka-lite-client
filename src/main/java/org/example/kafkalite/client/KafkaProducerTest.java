@@ -7,9 +7,34 @@ import org.example.kafkalite.producer.ProducerRecord;
 import org.example.kafkalite.producer.ProducerConfig;
 
 import java.util.Arrays;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class KafkaProducerTest {
+    // 生成指定大小的随机消息
+    private static String generateMessage(int sizeInBytes) {
+        Random random = new Random();
+        StringBuilder sb = new StringBuilder(sizeInBytes);
+        
+        // 生成随机字符，直到达到指定大小
+        while (sb.length() < sizeInBytes) {
+            // 使用数字和字母，避免特殊字符可能导致的问题
+            char c = (char) (random.nextInt(26) + 'a');
+            sb.append(c);
+        }
+        
+        return sb.toString();
+    }
+    
+    // 预生成一些消息模板，避免每次都生成新的随机消息
+    private static String[] generateMessageTemplates(int count, int sizeInBytes) {
+        String[] templates = new String[count];
+        for (int i = 0; i < count; i++) {
+            templates[i] = generateMessage(sizeInBytes);
+        }
+        return templates;
+    }
+    
     public static void main(String[] args) {
         // 1. 配置 broker 地址
         String broker = "10.251.183.199:27462";
@@ -19,7 +44,7 @@ public class KafkaProducerTest {
 
         // 2. 创建生产者配置
         ProducerConfig config = new ProducerConfig.Builder()
-            .batchSize(16384)  // 16KB批次大小
+            .batchSize(65536)  // 增大批次大小到64KB，适应1KB消息
             .lingerMs(1)       // 1ms等待时间，提高吞吐量
             .maxRetries(3)
             .maxQueueSize(500000) // 增大队列大小
@@ -39,10 +64,19 @@ public class KafkaProducerTest {
         } else {
             testDurationMs = 120000; // 默认2分钟
         }
+        
+        // 消息大小（字节）
+        final int messageSizeBytes = 1024; // 1KB
+        System.out.printf("消息大小: %d 字节%n", messageSizeBytes);
+        
+        // 预生成10个消息模板，减少CPU开销
+        final String[] messageTemplates = generateMessageTemplates(10, messageSizeBytes);
+        System.out.println("已生成消息模板");
 
         // 用于计算实时QPS的变量
         AtomicLong messageCount = new AtomicLong(0);
         AtomicLong errorCount = new AtomicLong(0);
+        AtomicLong bytesSent = new AtomicLong(0);
         long startTime = System.currentTimeMillis();
         
         // 限流相关参数
@@ -62,20 +96,24 @@ public class KafkaProducerTest {
                         long now = System.currentTimeMillis();
                         long count = messageCount.get();
                         long errors = errorCount.get();
+                        long bytes = bytesSent.get();
                         double elapsedSeconds = (now - startTime) / 1000.0;
                         double totalQps = count / elapsedSeconds;
+                        double mbps = (bytes / (1024.0 * 1024.0)) / elapsedSeconds; // MB/s
                         
                         // 计算最近5秒的QPS
                         double recentQps = (count - lastCount) / ((now - lastTime) / 1000.0);
                         lastCount = count;
                         lastTime = now;
                         
-                        System.out.printf("时间: %.2f秒, 已发送: %d条消息, 错误: %d条, 平均QPS: %.2f, 最近QPS: %.2f, 队列大小: %d, 生产者QPS: %.2f, P99延迟: %.2f ms%n", 
+                        System.out.printf("时间: %.2f秒, 已发送: %d条消息(%.2fMB), 错误: %d条, 平均QPS: %.2f, 最近QPS: %.2f, 吞吐量: %.2fMB/s, 队列大小: %d, 生产者QPS: %.2f, P99延迟: %.2f ms%n", 
                             elapsedSeconds, 
                             count,
+                            bytes / (1024.0 * 1024.0),
                             errors,
                             totalQps,
                             recentQps,
+                            mbps,
                             producer.getQueueSize(),
                             producer.getProducerQPS(),
                             producer.getProducerP99Latency());
@@ -97,6 +135,8 @@ public class KafkaProducerTest {
                 final int threadId = t;
                 producerThreadsArray[t] = new Thread(() -> {
                     int localIndex = threadId * 1000000; // 每个线程使用不同的起始索引
+                    Random random = new Random();
+                    
                     try {
                         while (System.currentTimeMillis() - startTime < testDurationMs) {
                             // 实现限流: 检查发送速率是否超过限制
@@ -119,16 +159,21 @@ public class KafkaProducerTest {
                             
                             // 动态控制发送速率，避免队列溢出
                             if (producer.getQueueSize() < config.getMaxQueueSize() * 0.8) {
+                                // 从模板中随机选择一个消息，并添加唯一标识符
+                                String messageTemplate = messageTemplates[random.nextInt(messageTemplates.length)];
+                                String messageValue = String.format("%d:%s", localIndex, messageTemplate);
+                                
                                 ProducerRecord record = new ProducerRecord(
                                     "ouyangTest",
                                     "key" + localIndex, 
-                                    "hello kafka-lite " + localIndex
+                                    messageValue
                                 );
                                 
                                 try {
                                     producer.send(record);
                                     messageCount.incrementAndGet();
                                     messagesSinceLastCheck.incrementAndGet();
+                                    bytesSent.addAndGet(messageValue.length());
                                     localIndex++;
                                 } catch (Exception e) {
                                     errorCount.incrementAndGet();
@@ -166,12 +211,16 @@ public class KafkaProducerTest {
             double totalSeconds = (endTime - startTime) / 1000.0;
             long totalMessages = messageCount.get();
             long totalErrors = errorCount.get();
+            long totalBytes = bytesSent.get();
+            double mbps = (totalBytes / (1024.0 * 1024.0)) / totalSeconds;
             
             System.out.println("\n测试结束:");
             System.out.printf("总时间: %.2f秒%n", totalSeconds);
             System.out.printf("总消息数: %d%n", totalMessages);
+            System.out.printf("总数据量: %.2f MB%n", totalBytes / (1024.0 * 1024.0));
             System.out.printf("错误数: %d%n", totalErrors);
             System.out.printf("平均QPS: %.2f%n", totalMessages / totalSeconds);
+            System.out.printf("平均吞吐量: %.2f MB/s%n", mbps);
             System.out.printf("生产者QPS: %.2f%n", producer.getProducerQPS());
             System.out.printf("生产者P99延迟: %.2f ms%n", producer.getProducerP99Latency());
             
