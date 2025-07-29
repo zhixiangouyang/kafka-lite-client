@@ -10,6 +10,7 @@ import java.util.List;
 
 public class KafkaConsumerTest {
     public static void main(String[] args) {
+//        1
         // 1. 配置 broker 地址
         String broker = "localhost:9092";
 

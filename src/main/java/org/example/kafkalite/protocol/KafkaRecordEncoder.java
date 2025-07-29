@@ -2,12 +2,19 @@ package org.example.kafkalite.protocol;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.zip.CRC32;
+
+import org.example.kafkalite.producer.ProducerRecord;
 
 /**
  * 用于编码消息的工具类（v0版本）
  */
 public class KafkaRecordEncoder {
+
+    // Kafka默认消息大小限制，通常为1MB
+    private static final int MAX_MESSAGE_BYTES = 1024 * 1024;
 
     public static ByteBuffer encodeRecordBatch(String key, String value) {
         byte[] keyBytes = key != null ? key.getBytes(StandardCharsets.UTF_8) : null;
@@ -71,5 +78,60 @@ public class KafkaRecordEncoder {
 
         buf.flip();
         return buf;
+    }
+    
+    /**
+     * 批量编码多条消息
+     * 
+     * @param records 待编码的消息列表
+     * @return 编码后的ByteBuffer
+     */
+    public static ByteBuffer encodeBatchMessages(List<ProducerRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return ByteBuffer.allocate(0);
+        }
+        
+        if (records.size() == 1) {
+            ProducerRecord record = records.get(0);
+            return encodeRecordBatch(record.getKey(), record.getValue());
+        }
+        
+        // 计算总大小并检查每条消息
+        int totalSize = 0;
+        List<ByteBuffer> validMessages = new ArrayList<>();
+        
+        for (ProducerRecord record : records) {
+            ByteBuffer encoded = encodeRecordBatch(record.getKey(), record.getValue());
+            int messageSize = encoded.remaining();
+            
+            // 检查单条消息是否超过限制
+            if (messageSize > MAX_MESSAGE_BYTES) {
+                System.err.println("警告: 消息大小(" + messageSize + "字节)超过限制(" + MAX_MESSAGE_BYTES + "字节)，已跳过");
+                continue;
+            }
+            
+            // 检查累计大小是否超过限制
+            if (totalSize + messageSize > MAX_MESSAGE_BYTES) {
+                // 如果添加此消息会超过限制，停止添加
+                System.err.println("警告: 批量消息累计大小将超过限制(" + MAX_MESSAGE_BYTES + "字节)，剩余消息将在下一批次发送");
+                break;
+            }
+            
+            validMessages.add(encoded);
+            totalSize += messageSize;
+        }
+        
+        // 分配足够大的缓冲区
+        ByteBuffer batchBuffer = ByteBuffer.allocate(totalSize);
+        
+        // 复制所有有效消息
+        for (ByteBuffer message : validMessages) {
+            ByteBuffer duplicate = message.duplicate();
+            duplicate.rewind(); // 确保position在开始位置
+            batchBuffer.put(duplicate);
+        }
+        
+        batchBuffer.flip();
+        return batchBuffer;
     }
 }
