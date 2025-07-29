@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private final Partitioner partitioner;
@@ -38,10 +39,39 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         this.retryBackoffMs = config.getRetryBackoffMs();
         this.recordQueue = new LinkedBlockingQueue<>(config.getMaxQueueSize());
         
-        // 使用多线程发送消息，提高并行度
-        this.senderThreads = Math.max(2, Runtime.getRuntime().availableProcessors());
-        this.senderThreadPool = Executors.newFixedThreadPool(senderThreads);
+        // 使用更多线程发送消息，提高并行度
+        this.senderThreads = Math.max(8, Runtime.getRuntime().availableProcessors() * 2);
+        this.senderThreadPool = Executors.newFixedThreadPool(senderThreads, 
+            new ThreadFactory() {
+                private final AtomicLong threadCounter = new AtomicLong(0);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "kafka-sender-" + threadCounter.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
 
+        System.out.printf("初始化生产者: 发送线程数=%d, 批次大小=%d, 等待时间=%dms%n", 
+            senderThreads, batchSize, lingerMs);
+        
+        // 预先初始化连接和元数据
+        for (String broker : bootstrapServers) {
+            try {
+                String[] parts = broker.split(":");
+                String host = parts[0];
+                int port = Integer.parseInt(parts[1]);
+                
+                // 预先创建连接池
+                KafkaSocketClient.ConnectionPool connectionPool = new KafkaSocketClient.ConnectionPool(host, port, 10);
+                connectionPools.put(broker, connectionPool);
+                
+                System.out.printf("预先创建连接池: %s%n", broker);
+            } catch (Exception e) {
+                System.err.printf("预先创建连接池失败: %s, 错误: %s%n", broker, e.getMessage());
+            }
+        }
+            
         // 启动发送线程
         startSenderThreads();
     }
@@ -49,7 +79,9 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private void startSenderThreads() {
         // 启动多个发送线程
         for (int i = 0; i < senderThreads; i++) {
+            final int threadId = i;
             senderThreadPool.submit(() -> {
+                System.out.printf("发送线程 %d 已启动%n", threadId);
                 List<ProducerRecord> batch = new ArrayList<>();
                 while (!closed.get() || !recordQueue.isEmpty()) {
                     try {
@@ -57,7 +89,10 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                         long batchStartTime = System.currentTimeMillis();
                         long remainingWaitTime = lingerMs;
                         
-                        while (batch.size() < batchSize && remainingWaitTime > 0) {
+                        // 降低批处理阈值，更快触发发送
+                        int currentBatchSize = Math.max(10, batchSize / 4);
+                        
+                        while (batch.size() < currentBatchSize && remainingWaitTime > 0) {
                             ProducerRecord record = recordQueue.poll(remainingWaitTime, TimeUnit.MILLISECONDS);
                             if (record != null) {
                                 batch.add(record);
@@ -86,6 +121,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                                 Map<Integer, String> partitionToBroker = metadataManager.getPartitionLeaders(topic);
                                 int partitionCount = partitionToBroker.size();
                                 if (partitionCount == 0) {
+                                    System.err.printf("警告: topic=%s 没有可用分区%n", topic);
                                     continue; // 跳过没有分区的主题
                                 }
                                 
@@ -110,34 +146,52 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                             
                             // 并行发送每个分区的批次
                             CountDownLatch latch = new CountDownLatch(totalBatches);
+                            List<Future<?>> futures = new ArrayList<>(totalBatches);
+                            
                             for (Map.Entry<String, Map<Integer, List<ProducerRecord>>> topicEntry : topicPartitionBatches.entrySet()) {
                                 String topic = topicEntry.getKey();
                                 for (Map.Entry<Integer, List<ProducerRecord>> partitionEntry : topicEntry.getValue().entrySet()) {
                                     int partition = partitionEntry.getKey();
                                     List<ProducerRecord> partitionBatch = partitionEntry.getValue();
                                     
-                                    // 提交到线程池中执行
-                                    CompletableFuture.runAsync(() -> {
-                                        try {
-                                            sendPartitionBatch(topic, partition, partitionBatch);
-                                        } catch (Exception e) {
-                                            System.err.println("发送分区批次失败: " + e.getMessage());
-                                        } finally {
-                                            latch.countDown();
-                                        }
-                                    }, senderThreadPool);
+                                    // 直接发送，不使用CompletableFuture，避免线程池饥饿
+                                    try {
+                                        sendPartitionBatch(topic, partition, partitionBatch);
+                                    } catch (Exception e) {
+                                        System.err.println("发送分区批次失败: " + e.getMessage());
+                                    } finally {
+                                        latch.countDown();
+                                    }
                                 }
                             }
                             
-                            // 等待所有批次发送完成
-                            latch.await(lingerMs * 3, TimeUnit.MILLISECONDS);
+                            // 等待所有批次发送完成，或者超时
+                            boolean completed = latch.await(lingerMs * 5, TimeUnit.MILLISECONDS);
+                            if (!completed) {
+                                System.err.println("警告: 部分批次发送超时，取消剩余任务");
+                                // 取消未完成的任务
+                                for (Future<?> future : futures) {
+                                    if (!future.isDone()) {
+                                        future.cancel(true);
+                                    }
+                                }
+                            }
+                            
                             batch.clear();
+                        } else {
+                            // 没有消息可发送，短暂等待
+                            Thread.sleep(1);
                         }
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
+                        System.err.printf("发送线程 %d 被中断%n", threadId);
                         break;
+                    } catch (Exception e) {
+                        System.err.printf("发送线程 %d 发生错误: %s%n", threadId, e.getMessage());
+                        // 继续运行，不要因为一个错误就退出线程
                     }
                 }
+                System.out.printf("发送线程 %d 已退出%n", threadId);
             });
         }
     }
@@ -145,12 +199,15 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private void sendPartitionBatch(String topic, int partition, List<ProducerRecord> batch) {
         if (batch.isEmpty()) return;
         
+        // 移除小批量优化，确保所有消息都能及时发送
+        
         long startTime = System.currentTimeMillis();
         try {
             // 获取分区对应的broker
             Map<Integer, String> partitionToBroker = metadataManager.getPartitionLeaders(topic);
             String brokerAddress = partitionToBroker.get(partition);
             if (brokerAddress == null) {
+                System.err.printf("错误: 找不到topic=%s, partition=%d的leader broker%n", topic, partition);
                 throw new RuntimeException("No leader broker found for topic = " + topic + ", partition = " + partition);
             }
             
@@ -159,13 +216,25 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             int port = Integer.parseInt(parts[1]);
             
             // 获取或创建连接池
-            KafkaSocketClient.ConnectionPool connectionPool = connectionPools.computeIfAbsent(
-                brokerAddress, 
-                k -> new KafkaSocketClient.ConnectionPool(host, port, 10) // 每个broker维护10个连接
-            );
+            KafkaSocketClient.ConnectionPool connectionPool;
+            try {
+                connectionPool = connectionPools.computeIfAbsent(
+                    brokerAddress, 
+                    k -> new KafkaSocketClient.ConnectionPool(host, port, 10) // 每个broker维护10个连接
+                );
+            } catch (Exception e) {
+                System.err.printf("错误: 创建连接池失败: %s:%d, 错误: %s%n", host, port, e.getMessage());
+                throw e;
+            }
             
             // 构建批量消息
-            ByteBuffer recordBatch = buildRecordBatch(batch);
+            ByteBuffer recordBatch;
+            try {
+                recordBatch = buildRecordBatch(batch);
+            } catch (Exception e) {
+                System.err.printf("错误: 构建批量消息失败: %s%n", e.getMessage());
+                throw e;
+            }
             
             // 如果批量消息为空（可能因为大小限制被过滤），则直接返回
             if (recordBatch.remaining() == 0) {
@@ -174,18 +243,33 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             }
             
             // 构造ProduceRequest
-            ByteBuffer request = ProduceRequestBuilder.build(
-                    "kafka-lite",
-                    topic,
-                    partition,
-                    recordBatch,
-                    (short) 1,  //acks
-                    3000,
-                    1
-            );
+            ByteBuffer request;
+            try {
+                request = ProduceRequestBuilder.build(
+                        "kafka-lite",
+                        topic,
+                        partition,
+                        recordBatch,
+                        (short) 1,  //acks
+                        3000,
+                        1
+                );
+            } catch (Exception e) {
+                System.err.printf("错误: 构建ProduceRequest失败: %s%n", e.getMessage());
+                throw e;
+            }
             
             // 通过连接池发送
-            ByteBuffer response = connectionPool.sendAndReceive(request);
+            ByteBuffer response;
+            try {
+                response = connectionPool.sendAndReceive(request);
+                System.out.printf("成功发送 %d 条消息到 topic=%s, partition=%d%n", 
+                    batch.size(), topic, partition);
+            } catch (Exception e) {
+                System.err.printf("错误: 发送消息失败: topic=%s, partition=%d, 错误: %s%n", 
+                    topic, partition, e.getMessage());
+                throw e;
+            }
             
             // 这里可以解析响应，处理错误等
             
@@ -198,6 +282,8 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                     Thread.sleep(retryBackoffMs);
                     // 刷新元数据
                     metadataManager.refreshMetadata(topic);
+                    System.out.printf("重试发送消息 (第%d次): topic=%s, partition=%d%n", 
+                        retries + 1, topic, partition);
                     // 重试发送
                     sendPartitionBatch(topic, partition, batch);
                     return; // 如果重试成功，直接返回
@@ -205,8 +291,11 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                     // 处理中断异常
                     Thread.currentThread().interrupt();
                     interrupted = true;
+                    System.err.println("发送线程被中断");
                 } catch (Exception retryEx) {
                     retries++;
+                    System.err.printf("重试失败 (第%d次): topic=%s, partition=%d, 错误: %s%n", 
+                        retries, topic, partition, retryEx.getMessage());
                     if (retries >= maxRetries) {
                         System.err.println("批量发送失败，已达到最大重试次数: " + retryEx.getMessage());
                     }
@@ -287,7 +376,14 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         }
 
         try {
+            // 添加背压机制：如果队列已满超过90%，等待一段时间
+            while (recordQueue.size() > recordQueue.remainingCapacity() * 9) {
+                Thread.sleep(1);
+            }
+            
+            // 使用超时版本的offer，避免无限等待
             if (!recordQueue.offer(record, lingerMs, TimeUnit.MILLISECONDS)) {
+                System.err.println("警告: 发送缓冲区已满，消息被丢弃");
                 throw new RuntimeException("Send buffer is full");
             }
         } catch (InterruptedException e) {
