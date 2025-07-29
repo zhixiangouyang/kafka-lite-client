@@ -87,12 +87,10 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         List<PartitionAssignment> assignments = coordinator.getAssignments();
         System.out.println("[Poll] 当前分区分配: " + assignments);
         try {
-            // 获取分配的分区
             if (assignments == null || assignments.isEmpty()) {
                 System.out.println("[Poll] 当前无分区分配，返回空结果");
                 return allRecords;
             }
-            // 按分配的分区拉取消息
             for (PartitionAssignment assignment : assignments) {
                 if (allRecords.size() >= config.getMaxPollRecords()) {
                     break;
@@ -123,27 +121,18 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                         );
                         ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, fetchRequest);
                         List<ConsumerRecord> records = FetchResponseParser.parse(response);
-                        System.out.printf("[Poll] 拉取到 records.size()=%d\n", records.size());
-                        allRecords.addAll(records);
-                        System.out.printf("[Poll] allRecords.size()=%d\n", allRecords.size());
                         if (!records.isEmpty()) {
+                            long firstOffset = records.get(0).getOffset();
                             long lastOffset = records.get(records.size() - 1).getOffset();
-                            // 打印所有offset
-                            System.out.print("[Poll] 本批次所有offset: ");
-                            for (ConsumerRecord r : records) {
-                                System.out.print(r.getOffset() + ", ");
-                            }
-                            System.out.println();
-                            System.out.printf("[DEBUG] poll: updateOffset topic=%s, partition=%d, offset=%d\n", topic, partition, lastOffset + 1);
+                            System.out.printf("[Poll] 拉取到%d条消息, offset范围: [%d, %d]\n", records.size(), firstOffset, lastOffset);
                             offsetManager.updateOffset(topic, partition, lastOffset + 1);
-                            System.out.println("[DEBUG] poll: updateOffset called");
                         } else {
                             System.out.printf("[Poll] topic=%s, partition=%d, fetched=0%n", topic, partition);
                         }
+                        allRecords.addAll(records);
                         break;
                     } catch (Exception e) {
                         System.err.println("[Poll] 拉取异常: " + e.getMessage());
-                        e.printStackTrace();
                         retryCount++;
                         if (retryCount >= config.getMaxRetries()) {
                             System.err.println("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries");
@@ -165,8 +154,6 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_POLL);
             metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_POLL, endTime - startTime);
             System.out.printf("[Poll] 本次总共拉取消息数: %d\n", allRecords.size());
-            // 自动提交 offset
-            System.out.println("[Poll] 自动提交 offset ...");
             commitSync();
             System.out.println("[Poll] offset 提交完成");
         }
