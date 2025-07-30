@@ -28,6 +28,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private final long retryBackoffMs;
     private final ConcurrentMap<String, KafkaSocketClient.ConnectionPool> connectionPools = new ConcurrentHashMap<>();
     private final int senderThreads;
+    private final String compressionType;
 
     public KafkaLiteProducerImpl(List<String> bootstrapServers, Partitioner partitioner, ProducerConfig config) {
         this.partitioner = partitioner;
@@ -38,9 +39,10 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         this.maxRetries = config.getMaxRetries();
         this.retryBackoffMs = config.getRetryBackoffMs();
         this.recordQueue = new LinkedBlockingQueue<>(config.getMaxQueueSize());
+        this.compressionType = config.getCompressionType();
         
         // 使用更多线程发送消息，提高并行度
-        this.senderThreads = Math.max(8, Runtime.getRuntime().availableProcessors() * 2);
+        this.senderThreads = Math.max(50, Runtime.getRuntime().availableProcessors() * 4);
         this.senderThreadPool = Executors.newFixedThreadPool(senderThreads, 
             new ThreadFactory() {
                 private final AtomicLong threadCounter = new AtomicLong(0);
@@ -63,7 +65,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 int port = Integer.parseInt(parts[1]);
                 
                 // 预先创建连接池
-                KafkaSocketClient.ConnectionPool connectionPool = new KafkaSocketClient.ConnectionPool(host, port, 10);
+                KafkaSocketClient.ConnectionPool connectionPool = new KafkaSocketClient.ConnectionPool(host, port, 60);
                 connectionPools.put(broker, connectionPool);
                 
                 System.out.printf("预先创建连接池: %s%n", broker);
@@ -313,7 +315,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     
     private ByteBuffer buildRecordBatch(List<ProducerRecord> records) {
         // 使用优化版批量编码功能，适合处理1KB大小的消息
-        return KafkaRecordEncoder.encodeBatchMessagesOptimized(records);
+        return KafkaRecordEncoder.encodeBatchMessagesOptimized(records, compressionType);
     }
 
     private void doSend(ProducerRecord record) throws Exception {

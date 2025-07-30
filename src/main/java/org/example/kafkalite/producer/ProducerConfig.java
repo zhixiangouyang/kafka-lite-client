@@ -6,6 +6,7 @@ public class ProducerConfig {
     private final int maxRetries;   // 最大重试次数，默认3次
     private final long retryBackoffMs;  // 重试间隔，默认100ms
     private final int maxQueueSize;     // 发送队列大小，默认10000
+    private String compressionType = "none";
 
     private ProducerConfig(Builder builder) {
         this.batchSize = builder.batchSize;
@@ -13,6 +14,7 @@ public class ProducerConfig {
         this.maxRetries = builder.maxRetries;
         this.retryBackoffMs = builder.retryBackoffMs;
         this.maxQueueSize = builder.maxQueueSize;
+        this.compressionType = builder.compressionType;
     }
 
     public int getBatchSize() {
@@ -35,12 +37,17 @@ public class ProducerConfig {
         return maxQueueSize;
     }
 
+    public String getCompressionType() {
+        return compressionType;
+    }
+
     public static class Builder {
         private int batchSize = 16384; // 16KB
         private long lingerMs = 5;
         private int maxRetries = 3;
         private long retryBackoffMs = 100;
         private int maxQueueSize = 10000;
+        private String compressionType = "none";
 
         public Builder batchSize(int batchSize) {
             this.batchSize = batchSize;
@@ -64,6 +71,11 @@ public class ProducerConfig {
 
         public Builder maxQueueSize(int maxQueueSize) {
             this.maxQueueSize = maxQueueSize;
+            return this;
+        }
+
+        public Builder compressionType(String compressionType) {
+            this.compressionType = compressionType;
             return this;
         }
 

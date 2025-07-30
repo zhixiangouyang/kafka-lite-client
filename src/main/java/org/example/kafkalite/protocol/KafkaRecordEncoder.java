@@ -5,8 +5,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.zip.CRC32;
+import java.util.zip.GZIPOutputStream;
+import java.io.ByteArrayOutputStream;
 
 import org.example.kafkalite.producer.ProducerRecord;
+import org.xerial.snappy.Snappy;
 
 /**
  * 用于编码消息的工具类（v0版本）
@@ -272,5 +275,70 @@ public class KafkaRecordEncoder {
         
         batchBuffer.flip();
         return batchBuffer;
+    }
+
+    public static ByteBuffer encodeBatchMessagesOptimized(List<ProducerRecord> records, String compressionType) {
+        if (records == null || records.isEmpty()) {
+            return ByteBuffer.allocate(0);
+        }
+        if (records.size() == 1) {
+            ProducerRecord record = records.get(0);
+            return encodeRecordBatch(record.getKey(), record.getValue());
+        }
+        // 1. 组装多条普通消息（magic=0, attributes=0, key, value...）为消息集合
+        ByteBuffer messageSetBuffer = encodeBatchMessagesOptimized(records);
+        byte[] messageSet = new byte[messageSetBuffer.remaining()];
+        messageSetBuffer.get(messageSet);
+        // 2. 压缩消息集合
+        byte[] compressed = messageSet;
+        byte attributes = 0; // 0: none, 1: gzip, 2: snappy
+        if ("gzip".equalsIgnoreCase(compressionType)) {
+            try {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                GZIPOutputStream gzip = new GZIPOutputStream(bos);
+                gzip.write(messageSet);
+                gzip.close();
+                compressed = bos.toByteArray();
+                attributes = 1;
+            } catch (Exception e) {
+                System.err.println("GZIP压缩失败: " + e.getMessage());
+                compressed = messageSet;
+                attributes = 0;
+            }
+        } else if ("snappy".equalsIgnoreCase(compressionType)) {
+            try {
+                compressed = Snappy.compress(messageSet);
+                attributes = 2;
+            } catch (Exception e) {
+                System.err.println("Snappy压缩失败: " + e.getMessage());
+                compressed = messageSet;
+                attributes = 0;
+            }
+        }
+        // 3. 构造外层消息（magic=0, attributes=压缩类型, key=null, value=compressed）
+        int messageSize = 1 + 1 + 4 + 4 + compressed.length; // magic + attributes + key(-1) + value.length + value
+        int totalSize = 8 + 4 + 4 + messageSize; // offset + size + crc + message
+        ByteBuffer buf = ByteBuffer.allocate(totalSize);
+        buf.putLong(0L); // offset
+        buf.putInt(messageSize + 4); // size (包含crc)
+        int crcPosition = buf.position();
+        buf.putInt(0); // crc占位
+        int messageStart = buf.position();
+        buf.put((byte)0); // magic = 0
+        buf.put(attributes); // attributes = 压缩类型
+        buf.putInt(-1); // key=null
+        buf.putInt(compressed.length);
+        buf.put(compressed);
+        // 4. 计算并回填crc
+        int messageEnd = buf.position();
+        byte[] messageBytes = new byte[messageEnd - messageStart];
+        buf.position(messageStart);
+        buf.get(messageBytes);
+        CRC32 crc32 = new CRC32();
+        crc32.update(messageBytes);
+        buf.putInt(crcPosition, (int)crc32.getValue());
+        buf.position(messageEnd);
+        buf.flip();
+        return buf;
     }
 }

@@ -44,9 +44,10 @@ public class KafkaProducerTest {
 
         // 2. 创建生产者配置
         ProducerConfig config = new ProducerConfig.Builder()
-            .batchSize(65536)  // 增大批次大小到64KB，适应1KB消息
-            .lingerMs(1)       // 1ms等待时间，提高吞吐量
+            .batchSize(3800)  // 增大批次大小到64KB，适应1KB消息
+            .lingerMs(3)       // 1ms等待时间，提高吞吐量
             .maxRetries(3)
+            .compressionType("snappy")
             .maxQueueSize(500000) // 增大队列大小
             .build();
 
@@ -62,7 +63,7 @@ public class KafkaProducerTest {
         if (args.length > 1) {
             testDurationMs = Long.parseLong(args[1]);
         } else {
-            testDurationMs = 120000; // 默认2分钟
+            testDurationMs = 180000; // 默认3分钟
         }
         
         // 消息大小（字节）
@@ -128,7 +129,7 @@ public class KafkaProducerTest {
             // 4. 持续发送消息
             
             // 创建多个发送线程，提高生产速度
-            int producerThreads = 4; // 使用4个线程并行生产消息
+            int producerThreads = 1; // 使用4个线程并行生产消息
             Thread[] producerThreadsArray = new Thread[producerThreads];
             
             for (int t = 0; t < producerThreads; t++) {
