@@ -26,14 +26,14 @@ public class KafkaConsumerTest {
 
         // 3. 创建消费者实例
         KafkaLiteConsumer consumer = new KafkaLiteConsumerImpl(
-            "test-group-5",                    // 消费者组ID
+            "test-group-1",                    // 消费者组ID
             Arrays.asList(broker),           // Kafka集群地址
             config                           // 配置
         );
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("ouyangTest2"));
+            consumer.subscribe(Arrays.asList("ouyangTest1"));
 
             System.out.println("开始消费消息...");
             System.out.println("按 Ctrl+C 停止消费");

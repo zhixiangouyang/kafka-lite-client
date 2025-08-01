@@ -66,6 +66,17 @@ public class OffsetManager {
     }
     // v2协议重载
     public synchronized void commitSync(int generationId, String memberId) {
+        if (coordinator != null && !coordinator.isStable()) {
+            System.err.println("[OffsetManager] Group is not stable (rebalance in progress), skip commit");
+            return;
+        }
+        
+        // 新增：检查是否正在重新加入组
+        if (coordinator != null && coordinator.isRejoining()) {
+            System.err.println("[OffsetManager] Group is rejoining, skip commit");
+            return;
+        }
+        
         System.out.printf("[DEBUG] OffsetManager.commitSync called, thread=%s, generationId=%d, memberId=%s, offsets=%s\n", Thread.currentThread().getName(), generationId, memberId, offsets);
         if (generationId <= 0 || memberId == null || memberId.isEmpty()) {
             System.out.printf("[WARN] group未稳定，跳过本次offset提交: generationId=%d, memberId=%s\n", generationId, memberId);
@@ -79,8 +90,10 @@ public class OffsetManager {
                     groupId, offsets, 1, "kafka-ite", generationId, memberId, -1L
             );
             // 2. 发送并接收响应
-            ByteBuffer response = coordinatorSocket != null ?
-                coordinatorSocket.sendAndReceive(request) :
+            // 获取最新的coordinatorSocket引用
+            KafkaSingleSocketClient currentSocket = coordinator != null ? coordinator.getCoordinatorSocket() : coordinatorSocket;
+            ByteBuffer response = currentSocket != null ?
+                currentSocket.sendAndReceive(request) :
                 KafkaSocketClient.sendAndReceive(bootstrapServers.get(0).split(":")[0], Integer.parseInt(bootstrapServers.get(0).split(":")[1]), request);
             // 3. 解析响应
             byte[] respBytes = new byte[response.remaining()];
@@ -107,6 +120,15 @@ public class OffsetManager {
                         System.out.printf("[Commit] topic=%s, partition=%d, offset=%d, SUCCESS\n", topic, partition, offset);
                     } else {
                         System.out.printf("[Commit] topic=%s, partition=%d, offset=%d, ERROR_CODE=%d\n", topic, partition, offset, error);
+                        if (error == 16) {
+                            System.err.println("[OffsetManager] Commit failed with ILLEGAL_GENERATION, skip this commit and wait for next poll/rebalance");
+                            // 通知coordinator重新加入组
+                            if (coordinator != null) {
+                                System.out.println("[OffsetManager] Triggering rejoin group due to ILLEGAL_GENERATION");
+                                coordinator.triggerRejoinGroup();
+                            }
+                            return;
+                        }
                     }
                 }
             }

@@ -25,6 +25,10 @@ public class ConsumerCoordinator {
     private ScheduledExecutorService heartbeatExecutor;
     public KafkaSingleSocketClient coordinatorSocket;
     
+    public enum GroupState { UNJOINED, REBALANCING, STABLE }
+    private volatile GroupState groupState = GroupState.UNJOINED;
+    private volatile boolean isRejoining = false; // 新增：防止重复重新加入组
+    
     public ConsumerCoordinator(String clientId, String groupId, ConsumerConfig config) {
         this.clientId = clientId;
         this.groupId = groupId;
@@ -36,6 +40,7 @@ public class ConsumerCoordinator {
         this.subscribedTopics.clear();
         this.subscribedTopics.addAll(topics);
         try {
+            groupState = GroupState.REBALANCING;
             findCoordinator();
             this.coordinatorSocket = new KafkaSingleSocketClient(coordinatorHost, coordinatorPort);
             joinGroup();
@@ -43,6 +48,7 @@ public class ConsumerCoordinator {
             startHeartbeat();
         } catch (Exception e) {
             if (coordinatorSocket != null) coordinatorSocket.close();
+            groupState = GroupState.UNJOINED;
             throw new RuntimeException(e);
         }
     }
@@ -67,6 +73,7 @@ public class ConsumerCoordinator {
     
     private void joinGroup() {
         try {
+            groupState = GroupState.REBALANCING;
             ByteBuffer request = JoinGroupRequestBuilder.build(clientId, groupId, memberId, subscribedTopics);
             ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             JoinGroupResponseParser.JoinGroupResult result = JoinGroupResponseParser.parse(response);
@@ -78,15 +85,18 @@ public class ConsumerCoordinator {
             this.memberId = result.getMemberId();
             this.generationId = result.getGenerationId();
             System.out.printf("[ConsumerCoordinator] joinGroup success: generationId=%d, memberId=%s\n", this.generationId, this.memberId);
+            groupState = GroupState.STABLE;
             // System.out.println("[ConsumerCoordinator] Joined group: " + result);
             
         } catch (Exception e) {
+            groupState = GroupState.UNJOINED;
             throw new RuntimeException("Failed to join group", e);
         }
     }
     
     private void syncGroup() {
         try {
+            groupState = GroupState.REBALANCING;
             ByteBuffer request = SyncGroupRequestBuilder.build(clientId, groupId, generationId, memberId, subscribedTopics);
             ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             SyncGroupResponseParser.SyncGroupResult result = SyncGroupResponseParser.parse(response);
@@ -97,9 +107,11 @@ public class ConsumerCoordinator {
             
             this.assignments = result.getAssignments();
             System.out.printf("[ConsumerCoordinator] syncGroup success: assignments=%s\n", this.assignments);
+            groupState = GroupState.STABLE;
             // System.out.println("[ConsumerCoordinator] Synced group, assignments: " + result.getAssignments());
             
         } catch (Exception e) {
+            groupState = GroupState.UNJOINED;
             throw new RuntimeException("Failed to sync group", e);
         }
     }
@@ -112,6 +124,12 @@ public class ConsumerCoordinator {
         heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
         heartbeatExecutor.scheduleAtFixedRate(() -> {
             try {
+                // 如果正在重新加入组，跳过本次心跳
+                if (isRejoining) {
+                    System.out.println("[ConsumerCoordinator] Skipping heartbeat due to rejoin in progress");
+                    return;
+                }
+                
                 ByteBuffer request = HeartbeatRequestBuilder.build(clientId, groupId, generationId, memberId);
                 System.out.printf("[HeartbeatRequestBuilder] 请求字节流: %s\n", bytesToHex(request));
                 ByteBuffer response = coordinatorSocket.sendAndReceive(request);
@@ -119,14 +137,70 @@ public class ConsumerCoordinator {
                 System.out.printf("[HeartbeatResponse] errorCode=%d\n", errorCode);
                 if (errorCode == 0) {
                     System.out.println("[ConsumerCoordinator] Heartbeat success");
+                } else if (errorCode == 25) { // REBALANCE_IN_PROGRESS
+                    System.out.println("[ConsumerCoordinator] Rebalance in progress, will rejoin group");
+                    // 重新加入组
+                    rejoinGroup();
+                } else if (errorCode == 22) { // ILLEGAL_GENERATION
+                    System.err.println("[ConsumerCoordinator] Illegal generation, will rejoin group");
+                    // 重新加入组
+                    rejoinGroup();
                 } else {
                     System.err.println("[ConsumerCoordinator] Heartbeat failed with error: " + errorCode);
+                    // 对于其他错误，也尝试重新加入组
+                    rejoinGroup();
                 }
                 
             } catch (Exception e) {
                 System.err.println("[ConsumerCoordinator] Failed to send heartbeat: " + e);
+                // 心跳异常时也重新加入组
+                rejoinGroup();
             }
         }, 0, config.getHeartbeatIntervalMs(), TimeUnit.MILLISECONDS);
+    }
+    
+    // 新增：重新加入组的方法
+    private synchronized void rejoinGroup() {
+        if (isRejoining) {
+            System.out.println("[ConsumerCoordinator] Already re-joining, skipping...");
+            return;
+        }
+        try {
+            isRejoining = true; // 设置标志
+            System.out.println("[ConsumerCoordinator] Rejoining group...");
+            groupState = GroupState.REBALANCING;
+            
+            // 关闭旧的socket连接
+            if (coordinatorSocket != null) {
+                coordinatorSocket.close();
+            }
+            
+            // 重新建立连接
+            this.coordinatorSocket = new KafkaSingleSocketClient(coordinatorHost, coordinatorPort);
+            
+            // 重新加入组
+            joinGroup();
+            // 重新同步组
+            syncGroup();
+            
+            System.out.println("[ConsumerCoordinator] Successfully rejoined group");
+        } catch (Exception e) {
+            System.err.println("[ConsumerCoordinator] Failed to rejoin group: " + e.getMessage());
+            groupState = GroupState.UNJOINED;
+        } finally {
+            isRejoining = false; // 重置标志
+        }
+    }
+    
+    // 新增：公共方法，供OffsetManager调用
+    public synchronized void triggerRejoinGroup() {
+        System.out.println("[ConsumerCoordinator] Triggering rejoin group from external call");
+        rejoinGroup();
+    }
+    
+    // 新增：获取当前的coordinatorSocket
+    public KafkaSingleSocketClient getCoordinatorSocket() {
+        return coordinatorSocket;
     }
     
     public List<PartitionAssignment> getAssignments() {
@@ -138,6 +212,14 @@ public class ConsumerCoordinator {
     }
     public String getMemberId() {
         return memberId;
+    }
+    
+    public boolean isStable() {
+        return groupState == GroupState.STABLE;
+    }
+    
+    public boolean isRejoining() {
+        return isRejoining;
     }
     
     public void close() {
