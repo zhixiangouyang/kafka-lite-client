@@ -1,6 +1,7 @@
 package org.example.kafkalite.consumer;
 
 import org.example.kafkalite.core.KafkaSocketClient;
+import org.example.kafkalite.core.KafkaSingleSocketClient;
 import org.example.kafkalite.protocol.*;
 
 import java.nio.ByteBuffer;
@@ -22,6 +23,7 @@ public class ConsumerCoordinator {
     private int generationId;
     private List<PartitionAssignment> assignments = new ArrayList<>();
     private ScheduledExecutorService heartbeatExecutor;
+    public KafkaSingleSocketClient coordinatorSocket;
     
     public ConsumerCoordinator(String clientId, String groupId, ConsumerConfig config) {
         this.clientId = clientId;
@@ -33,11 +35,16 @@ public class ConsumerCoordinator {
     public void initializeGroup(List<String> topics) {
         this.subscribedTopics.clear();
         this.subscribedTopics.addAll(topics);
-        
-        findCoordinator();
-        joinGroup();
-        syncGroup();
-        startHeartbeat();
+        try {
+            findCoordinator();
+            this.coordinatorSocket = new KafkaSingleSocketClient(coordinatorHost, coordinatorPort);
+            joinGroup();
+            syncGroup();
+            startHeartbeat();
+        } catch (Exception e) {
+            if (coordinatorSocket != null) coordinatorSocket.close();
+            throw new RuntimeException(e);
+        }
     }
     
     private void findCoordinator() {
@@ -61,7 +68,7 @@ public class ConsumerCoordinator {
     private void joinGroup() {
         try {
             ByteBuffer request = JoinGroupRequestBuilder.build(clientId, groupId, memberId, subscribedTopics);
-            ByteBuffer response = KafkaSocketClient.sendAndReceive(coordinatorHost, coordinatorPort, request);
+            ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             JoinGroupResponseParser.JoinGroupResult result = JoinGroupResponseParser.parse(response);
             
             if (result.getErrorCode() != 0) {
@@ -81,7 +88,7 @@ public class ConsumerCoordinator {
     private void syncGroup() {
         try {
             ByteBuffer request = SyncGroupRequestBuilder.build(clientId, groupId, generationId, memberId, subscribedTopics);
-            ByteBuffer response = KafkaSocketClient.sendAndReceive(coordinatorHost, coordinatorPort, request);
+            ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             SyncGroupResponseParser.SyncGroupResult result = SyncGroupResponseParser.parse(response);
             
             if (result.getErrorCode() != 0) {
@@ -106,10 +113,13 @@ public class ConsumerCoordinator {
         heartbeatExecutor.scheduleAtFixedRate(() -> {
             try {
                 ByteBuffer request = HeartbeatRequestBuilder.build(clientId, groupId, generationId, memberId);
-                ByteBuffer response = KafkaSocketClient.sendAndReceive(coordinatorHost, coordinatorPort, request);
+                System.out.printf("[HeartbeatRequestBuilder] 请求字节流: %s\n", bytesToHex(request));
+                ByteBuffer response = coordinatorSocket.sendAndReceive(request);
                 short errorCode = HeartbeatResponseParser.parse(response);
-                
-                if (errorCode != 0) {
+                System.out.printf("[HeartbeatResponse] errorCode=%d\n", errorCode);
+                if (errorCode == 0) {
+                    System.out.println("[ConsumerCoordinator] Heartbeat success");
+                } else {
                     System.err.println("[ConsumerCoordinator] Heartbeat failed with error: " + errorCode);
                 }
                 
@@ -139,5 +149,19 @@ public class ConsumerCoordinator {
                 Thread.currentThread().interrupt();
             }
         }
+        if (coordinatorSocket != null) {
+            coordinatorSocket.close();
+        }
+    }
+
+    // 工具方法：打印字节流
+    private static String bytesToHex(ByteBuffer buffer) {
+        StringBuilder sb = new StringBuilder();
+        buffer.mark();
+        while (buffer.hasRemaining()) {
+            sb.append(String.format("%02x ", buffer.get()));
+        }
+        buffer.reset();
+        return sb.toString();
     }
 } 

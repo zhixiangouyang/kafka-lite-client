@@ -12,6 +12,7 @@ public class KafkaConsumerTest {
     public static void main(String[] args) {
 //        1
         // 1. 配置 broker 地址
+//        String broker = "localhost:9092";
         String broker = "10.251.183.199:27462";
 
         // 2. 创建消费者配置
@@ -25,14 +26,14 @@ public class KafkaConsumerTest {
 
         // 3. 创建消费者实例
         KafkaLiteConsumer consumer = new KafkaLiteConsumerImpl(
-            "test-group-1",                    // 消费者组ID
+            "test-group-5",                    // 消费者组ID
             Arrays.asList(broker),           // Kafka集群地址
             config                           // 配置
         );
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("ouyangTest1"));
+            consumer.subscribe(Arrays.asList("ouyangTest2"));
 
             System.out.println("开始消费消息...");
             System.out.println("按 Ctrl+C 停止消费");

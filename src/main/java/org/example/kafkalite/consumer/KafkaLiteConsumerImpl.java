@@ -40,6 +40,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.metricsCollector = new MetricsCollector();
         this.coordinator = new ConsumerCoordinator(clientId, groupId, config);
         this.offsetManager.setCoordinator(this.coordinator);
+        // 新增：注入coordinatorSocket
+        this.offsetManager.setCoordinatorSocket(this.coordinator.coordinatorSocket);
         // 移除 scheduler 相关自动提交线程实现
         // this.scheduler = Executors.newScheduledThreadPool(1);
     }
@@ -209,6 +211,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                 
                 // 关闭协调者
                 coordinator.close();
+                offsetManager.close();
             } finally {
                 // 清理资源
                 subscribedTopics = new ArrayList<>();

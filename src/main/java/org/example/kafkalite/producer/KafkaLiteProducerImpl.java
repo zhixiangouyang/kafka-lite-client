@@ -29,6 +29,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private final ConcurrentMap<String, KafkaSocketClient.ConnectionPool> connectionPools = new ConcurrentHashMap<>();
     private final int senderThreads;
     private final String compressionType;
+    private final int poolSize;
 
     public KafkaLiteProducerImpl(List<String> bootstrapServers, Partitioner partitioner, ProducerConfig config) {
         this.partitioner = partitioner;
@@ -40,6 +41,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         this.retryBackoffMs = config.getRetryBackoffMs();
         this.recordQueue = new LinkedBlockingQueue<>(config.getMaxQueueSize());
         this.compressionType = config.getCompressionType();
+        this.poolSize = config.getConnectionPoolSize();
         
         // 使用更多线程发送消息，提高并行度
         this.senderThreads = Math.max(50, Runtime.getRuntime().availableProcessors() * 4);
@@ -65,7 +67,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 int port = Integer.parseInt(parts[1]);
                 
                 // 预先创建连接池
-                KafkaSocketClient.ConnectionPool connectionPool = new KafkaSocketClient.ConnectionPool(host, port, 60);
+                KafkaSocketClient.ConnectionPool connectionPool = new KafkaSocketClient.ConnectionPool(host, port, this.poolSize);
                 connectionPools.put(broker, connectionPool);
                 
                 System.out.printf("预先创建连接池: %s%n", broker);
@@ -222,7 +224,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             try {
                 connectionPool = connectionPools.computeIfAbsent(
                     brokerAddress, 
-                    k -> new KafkaSocketClient.ConnectionPool(host, port, 10) // 每个broker维护10个连接
+                    k -> new KafkaSocketClient.ConnectionPool(host, port, this.poolSize)
                 );
             } catch (Exception e) {
                 System.err.printf("错误: 创建连接池失败: %s:%d, 错误: %s%n", host, port, e.getMessage());
@@ -350,7 +352,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         // 获取或创建连接池
         KafkaSocketClient.ConnectionPool connectionPool = connectionPools.computeIfAbsent(
             brokerAddress, 
-            k -> new KafkaSocketClient.ConnectionPool(host, port, 10)
+            k -> new KafkaSocketClient.ConnectionPool(host, port, this.poolSize)
         );
 
         // 5. 构造 RecordBatch（Kafka协议标准格式）

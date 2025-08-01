@@ -1,6 +1,7 @@
 package org.example.kafkalite.consumer;
 
 import org.example.kafkalite.core.KafkaSocketClient;
+import org.example.kafkalite.core.KafkaSingleSocketClient;
 import org.example.kafkalite.protocol.OffsetCommitRequestBuilder;
 import org.example.kafkalite.protocol.OffsetCommitResponseParser;
 import org.example.kafkalite.protocol.OffsetFetchRequestBuilder;
@@ -18,6 +19,7 @@ public class OffsetManager {
     // topic -> partition -> offset
     private final Map<String, Map<Integer, Long>> offsets = new HashMap<>();
     private ConsumerCoordinator coordinator;
+    private KafkaSingleSocketClient coordinatorSocket;
 
     public OffsetManager(String groupId, List<String> bootstrapServers) {
         this.groupId = groupId;
@@ -26,6 +28,10 @@ public class OffsetManager {
 
     public void setCoordinator(ConsumerCoordinator coordinator) {
         this.coordinator = coordinator;
+    }
+
+    public void setCoordinatorSocket(KafkaSingleSocketClient socket) {
+        this.coordinatorSocket = socket;
     }
 
     // 获取当前offset
@@ -72,14 +78,11 @@ public class OffsetManager {
             ByteBuffer request = OffsetCommitRequestBuilder.build(
                     groupId, offsets, 1, "kafka-ite", generationId, memberId, -1L
             );
-            // 2. 选一个 broker 发送
-            String brokerAddress = bootstrapServers.get(0);
-            String[] parts = brokerAddress.split(":");
-            String host = parts[0];
-            int port = Integer.parseInt(parts[1]);
-            // 3. 发送并接收响应
-            ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, request);
-            // 打印响应字节流
+            // 2. 发送并接收响应
+            ByteBuffer response = coordinatorSocket != null ?
+                coordinatorSocket.sendAndReceive(request) :
+                KafkaSocketClient.sendAndReceive(bootstrapServers.get(0).split(":")[0], Integer.parseInt(bootstrapServers.get(0).split(":")[1]), request);
+            // 3. 解析响应
             byte[] respBytes = new byte[response.remaining()];
             response.mark();
             response.get(respBytes);
@@ -87,7 +90,6 @@ public class OffsetManager {
             System.out.print("[OffsetCommitResponse] 响应字节流: ");
             for (byte b : respBytes) System.out.printf("%02x ", b);
             System.out.println();
-            // 4. 解析响应并检查 errorCode
             Map<String, Map<Integer, Short>> result = null;
             try {
                 result = org.example.kafkalite.protocol.OffsetCommitResponseParser.parse(response);
@@ -148,6 +150,13 @@ public class OffsetManager {
             System.out.println("[OffsetManager] fetchCommittedOffsets 完成: " + offsets);
         } catch (Exception e) {
             System.err.println("[OffsetManager] fetchCommittedOffsets 失败: " + e.getMessage());
+        }
+    }
+
+    // 关闭socket
+    public void close() {
+        if (coordinatorSocket != null) {
+            coordinatorSocket.close();
         }
     }
 }
