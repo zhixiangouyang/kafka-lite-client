@@ -38,7 +38,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.metadataManager = new MetadataManagerImpl(bootstrapServers);
         this.offsetManager = new OffsetManager(groupId, bootstrapServers);
         this.metricsCollector = new MetricsCollector();
-        this.coordinator = new ConsumerCoordinator(clientId, groupId, config);
+        this.coordinator = new ConsumerCoordinator(clientId, groupId, config, bootstrapServers);
         this.offsetManager.setCoordinator(this.coordinator);
         // 新增：注入coordinatorSocket
         this.offsetManager.setCoordinatorSocket(this.coordinator.coordinatorSocket);
@@ -155,9 +155,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                 System.out.println("[DEBUG] poll finally自动提交offset");
                 commitSync();
             } else {
-                System.out.println("[DEBUG] poll finally调用commitSync");
-            commitSync();
-                System.out.println("[Poll] offset 手动提交完成");
+                System.out.println("[DEBUG] poll finally不自动提交offset，需要手动调用commitSync");
             }
         }
         return allRecords;

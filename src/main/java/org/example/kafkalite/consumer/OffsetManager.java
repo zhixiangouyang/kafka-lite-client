@@ -87,7 +87,7 @@ public class OffsetManager {
             System.out.println("[DEBUG] offsets to commit: " + offsets);
             // 1. 构造 OffsetCommitRequest v2
             ByteBuffer request = OffsetCommitRequestBuilder.build(
-                    groupId, offsets, 1, "kafka-ite", generationId, memberId, -1L
+                    groupId, offsets, 1, "kafka-ite", generationId, memberId, 86400000L  // 使用24小时作为保留时间
             );
             // 2. 发送并接收响应
             // 获取最新的coordinatorSocket引用
@@ -132,8 +132,72 @@ public class OffsetManager {
                     }
                 }
             }
+            
+            // 新增：commit成功后验证offset是否真的提交了
+            System.out.println("[OffsetManager] Commit成功，验证offset是否真的提交...");
+            verifyCommittedOffsets();
         } catch (Exception e) {
             System.err.println("[Commit] commitSync failed: " + e.getMessage());
+        }
+    }
+    
+    // 新增：验证已提交的offset
+    private void verifyCommittedOffsets() {
+        try {
+            // 等待一段时间让offset真正写入
+            System.out.println("[OffsetManager] 等待1秒让offset写入...");
+            Thread.sleep(1000);
+            
+            // 构造查询请求
+            java.util.Map<String, Integer[]> topicParts = new java.util.HashMap<>();
+            for (Map.Entry<String, Map<Integer, Long>> entry : offsets.entrySet()) {
+                String topic = entry.getKey();
+                java.util.List<Integer> parts = new java.util.ArrayList<>(entry.getValue().keySet());
+                topicParts.put(topic, parts.toArray(new Integer[0]));
+            }
+            
+            java.nio.ByteBuffer request = org.example.kafkalite.protocol.OffsetFetchRequestBuilder.build(
+                    groupId, topicParts, 1, "kafka-lite"
+            );
+            
+            java.util.Map<String, java.util.Map<Integer, Long>> committed;
+            
+            // 使用coordinator而不是bootstrap server
+            if (coordinator != null && coordinator.getCoordinatorSocket() != null) {
+                System.out.printf("[OffsetManager] 验证时使用coordinator: %s:%d\n", 
+                    coordinator.getCoordinatorSocket().getHost(), coordinator.getCoordinatorSocket().getPort());
+                java.nio.ByteBuffer response = coordinator.getCoordinatorSocket().sendAndReceive(request);
+                committed = org.example.kafkalite.protocol.OffsetFetchResponseParser.parse(response);
+            } else {
+                // 回退到使用bootstrap server
+                String brokerAddress = bootstrapServers.get(0);
+                String[] parts = brokerAddress.split(":");
+                String host = parts[0];
+                int port = Integer.parseInt(parts[1]);
+                System.out.printf("[OffsetManager] 验证时使用bootstrap server: %s:%d\n", host, port);
+                java.nio.ByteBuffer response = org.example.kafkalite.core.KafkaSocketClient.sendAndReceive(host, port, request);
+                committed = org.example.kafkalite.protocol.OffsetFetchResponseParser.parse(response);
+            }
+            
+            System.out.printf("[OffsetManager] 验证结果 - 期望的offset: %s\n", offsets);
+            System.out.printf("[OffsetManager] 验证结果 - 实际提交的offset: %s\n", committed);
+            
+            // 比较期望和实际的offset
+            for (Map.Entry<String, Map<Integer, Long>> entry : offsets.entrySet()) {
+                String topic = entry.getKey();
+                for (Map.Entry<Integer, Long> part : entry.getValue().entrySet()) {
+                    int partition = part.getKey();
+                    long expectedOffset = part.getValue();
+                    long actualOffset = committed.getOrDefault(topic, new java.util.HashMap<>()).getOrDefault(partition, -1L);
+                    if (actualOffset == expectedOffset) {
+                        System.out.printf("[OffsetManager] 验证成功: topic=%s, partition=%d, offset=%d\n", topic, partition, expectedOffset);
+                    } else {
+                        System.err.printf("[OffsetManager] 验证失败: topic=%s, partition=%d, 期望=%d, 实际=%d\n", topic, partition, expectedOffset, actualOffset);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[OffsetManager] 验证offset失败: " + e.getMessage());
         }
     }
 
@@ -146,6 +210,7 @@ public class OffsetManager {
     // 新增：从 broker 查询 group offset
     public synchronized void fetchCommittedOffsets(java.util.List<String> topics, java.util.Map<String, java.util.List<Integer>> topicPartitions) {
         try {
+            System.out.printf("[OffsetManager] 开始查询已提交的offset: groupId=%s, topics=%s\n", groupId, topics);
             // 构造请求参数
             java.util.Map<String, Integer[]> topicParts = new java.util.HashMap<>();
             for (String topic : topics) {
@@ -157,21 +222,41 @@ public class OffsetManager {
             java.nio.ByteBuffer request = org.example.kafkalite.protocol.OffsetFetchRequestBuilder.build(
                     groupId, topicParts, 1, "kafka-lite"
             );
-            String brokerAddress = bootstrapServers.get(0);
-            String[] parts = brokerAddress.split(":");
-            String host = parts[0];
-            int port = Integer.parseInt(parts[1]);
-            java.nio.ByteBuffer response = org.example.kafkalite.core.KafkaSocketClient.sendAndReceive(host, port, request);
-            java.util.Map<String, java.util.Map<Integer, Long>> committed = org.example.kafkalite.protocol.OffsetFetchResponseParser.parse(response);
-            for (java.util.Map.Entry<String, java.util.Map<Integer, Long>> entry : committed.entrySet()) {
-                String topic = entry.getKey();
-                for (java.util.Map.Entry<Integer, Long> part : entry.getValue().entrySet()) {
-                    updateOffset(topic, part.getKey(), part.getValue());
+            
+            // 使用coordinator而不是bootstrap server
+            if (coordinator != null && coordinator.getCoordinatorSocket() != null) {
+                System.out.printf("[OffsetManager] 使用coordinator查询offset: %s:%d\n", 
+                    coordinator.getCoordinatorSocket().getHost(), coordinator.getCoordinatorSocket().getPort());
+                java.nio.ByteBuffer response = coordinator.getCoordinatorSocket().sendAndReceive(request);
+                java.util.Map<String, java.util.Map<Integer, Long>> committed = org.example.kafkalite.protocol.OffsetFetchResponseParser.parse(response);
+                System.out.printf("[OffsetManager] 查询到的已提交offset: %s\n", committed);
+                for (java.util.Map.Entry<String, java.util.Map<Integer, Long>> entry : committed.entrySet()) {
+                    String topic = entry.getKey();
+                    for (java.util.Map.Entry<Integer, Long> part : entry.getValue().entrySet()) {
+                        updateOffset(topic, part.getKey(), part.getValue());
+                    }
+                }
+            } else {
+                // 回退到使用bootstrap server
+                String brokerAddress = bootstrapServers.get(0);
+                String[] parts = brokerAddress.split(":");
+                String host = parts[0];
+                int port = Integer.parseInt(parts[1]);
+                System.out.printf("[OffsetManager] 使用bootstrap server查询offset: %s:%d\n", host, port);
+                java.nio.ByteBuffer response = org.example.kafkalite.core.KafkaSocketClient.sendAndReceive(host, port, request);
+                java.util.Map<String, java.util.Map<Integer, Long>> committed = org.example.kafkalite.protocol.OffsetFetchResponseParser.parse(response);
+                System.out.printf("[OffsetManager] 查询到的已提交offset: %s\n", committed);
+                for (java.util.Map.Entry<String, java.util.Map<Integer, Long>> entry : committed.entrySet()) {
+                    String topic = entry.getKey();
+                    for (java.util.Map.Entry<Integer, Long> part : entry.getValue().entrySet()) {
+                        updateOffset(topic, part.getKey(), part.getValue());
+                    }
                 }
             }
             System.out.println("[OffsetManager] fetchCommittedOffsets 完成: " + offsets);
         } catch (Exception e) {
             System.err.println("[OffsetManager] fetchCommittedOffsets 失败: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 

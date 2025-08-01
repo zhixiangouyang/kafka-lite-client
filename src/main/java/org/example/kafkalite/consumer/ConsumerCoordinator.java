@@ -16,6 +16,7 @@ public class ConsumerCoordinator {
     private final String groupId;
     private final ConsumerConfig config;
     private final List<String> subscribedTopics;
+    private final List<String> bootstrapServers; // 新增：bootstrapServers
     
     private String coordinatorHost;
     private int coordinatorPort;
@@ -29,10 +30,11 @@ public class ConsumerCoordinator {
     private volatile GroupState groupState = GroupState.UNJOINED;
     private volatile boolean isRejoining = false; // 新增：防止重复重新加入组
     
-    public ConsumerCoordinator(String clientId, String groupId, ConsumerConfig config) {
+    public ConsumerCoordinator(String clientId, String groupId, ConsumerConfig config, List<String> bootstrapServers) {
         this.clientId = clientId;
         this.groupId = groupId;
         this.config = config;
+        this.bootstrapServers = bootstrapServers; // 新增：保存bootstrapServers
         this.subscribedTopics = new ArrayList<>();
     }
     
@@ -56,7 +58,12 @@ public class ConsumerCoordinator {
     private void findCoordinator() {
         try {
             ByteBuffer request = FindCoordinatorRequestBuilder.build(clientId, groupId, 1);
-            ByteBuffer response = KafkaSocketClient.sendAndReceive("localhost", 9092, request);
+            // 使用bootstrapServers而不是硬编码的localhost:9092
+            String bootstrapServer = bootstrapServers.get(0);
+            String[] parts = bootstrapServer.split(":");
+            String host = parts[0];
+            int port = Integer.parseInt(parts[1]);
+            ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, request);
             FindCoordinatorResponseParser.CoordinatorInfo info = FindCoordinatorResponseParser.parse(response);
             
             if (info.getErrorCode() != 0) {
@@ -65,6 +72,7 @@ public class ConsumerCoordinator {
             
             this.coordinatorHost = info.getHost();
             this.coordinatorPort = info.getPort();
+            System.out.printf("[ConsumerCoordinator] Found coordinator: %s:%d\n", this.coordinatorHost, this.coordinatorPort);
             
         } catch (Exception e) {
             throw new RuntimeException("Failed to find coordinator", e);

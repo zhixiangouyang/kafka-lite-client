@@ -71,12 +71,21 @@ public class KafkaSingleSocketClient {
 
     public void close() {
         synchronized (lock) {
-            try {
-                if (socket != null) socket.close();
-            } catch (IOException ignored) {}
-            socket = null;
-            in = null;
-            out = null;
+            if (socket != null && !socket.isClosed()) {
+                try {
+                    socket.close();
+                } catch (IOException e) {
+                    // ignore
+                }
+            }
         }
+    }
+    
+    public String getHost() {
+        return host;
+    }
+    
+    public int getPort() {
+        return port;
     }
 } 
