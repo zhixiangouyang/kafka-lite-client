@@ -44,8 +44,9 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         this.poolSize = config.getConnectionPoolSize();
         
         // 使用更多线程发送消息，提高并行度
+//        this.senderThreads = 1;
         this.senderThreads = Math.max(50, Runtime.getRuntime().availableProcessors() * 4);
-        this.senderThreadPool = Executors.newFixedThreadPool(senderThreads, 
+        this.senderThreadPool = Executors.newFixedThreadPool(senderThreads,
             new ThreadFactory() {
                 private final AtomicLong threadCounter = new AtomicLong(0);
                 @Override
@@ -394,6 +395,16 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while adding record to queue", e);
         }
+    }
+
+    @Override
+    public void sendSync(ProducerRecord record) throws Exception {
+        if (closed.get()) {
+            throw new IllegalStateException("Cannot send after the producer is closed");
+        }
+
+        // 直接调用现有的doSend方法进行同步发送
+        doSend(record);
     }
 
     @Override

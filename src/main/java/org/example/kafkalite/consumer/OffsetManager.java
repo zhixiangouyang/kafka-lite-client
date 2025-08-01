@@ -134,8 +134,8 @@ public class OffsetManager {
             }
             
             // 新增：commit成功后验证offset是否真的提交了
-            System.out.println("[OffsetManager] Commit成功，验证offset是否真的提交...");
-            verifyCommittedOffsets();
+            // System.out.println("[OffsetManager] Commit成功，验证offset是否真的提交...");
+            // verifyCommittedOffsets();
         } catch (Exception e) {
             System.err.println("[Commit] commitSync failed: " + e.getMessage());
         }

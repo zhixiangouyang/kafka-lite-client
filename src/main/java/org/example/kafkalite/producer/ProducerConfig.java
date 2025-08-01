@@ -6,7 +6,7 @@ public class ProducerConfig {
     private final int maxRetries;   // 最大重试次数，默认3次
     private final long retryBackoffMs;  // 重试间隔，默认100ms
     private final int maxQueueSize;     // 发送队列大小，默认10000
-    private final int connectionPoolSize; // 新增，连接池大小，默认60
+    private final int connectionPoolSize; // 连接池大小，默认60
     private String compressionType = "none";
 
     private ProducerConfig(Builder builder) {

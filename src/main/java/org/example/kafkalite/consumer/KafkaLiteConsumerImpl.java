@@ -134,6 +134,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                             System.err.println("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries");
                             metadataManager.refreshMetadata(topic);
                             topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
+                            // 重试失败后抛出异常，而不是静默失败
+                            throw new RuntimeException("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries", e);
                         } else {
                             try {
                                 Thread.sleep(config.getRetryBackoffMs());
@@ -145,6 +147,10 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                     }
                 }
             }
+        } catch (Exception e) {
+            System.err.println("[Poll] 拉取过程中发生异常: " + e.getMessage());
+            e.printStackTrace();
+            // 不要重新抛出异常，而是返回空结果，让消费者继续运行
         } finally {
             long endTime = System.currentTimeMillis();
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_POLL);
