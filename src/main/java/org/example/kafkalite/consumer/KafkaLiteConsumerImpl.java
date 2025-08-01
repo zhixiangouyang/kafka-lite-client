@@ -27,7 +27,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
     private List<String> subscribedTopics = new ArrayList<>();
     private final Map<String, Map<Integer, String>> topicPartitionLeaders = new HashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
-    private final ScheduledExecutorService scheduler;
+    // 移除 scheduler 相关自动提交线程实现
+    // private final ScheduledExecutorService scheduler;
 
     public KafkaLiteConsumerImpl(String groupId, List<String> bootstrapServers, ConsumerConfig config) {
         this.groupId = groupId;
@@ -39,17 +40,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.metricsCollector = new MetricsCollector();
         this.coordinator = new ConsumerCoordinator(clientId, groupId, config);
         this.offsetManager.setCoordinator(this.coordinator);
-        this.scheduler = Executors.newScheduledThreadPool(1);
-
-        // 如果启用了自动提交，启动定时任务
-        if (config.isEnableAutoCommit()) {
-            scheduler.scheduleAtFixedRate(
-                this::commitAsync,
-                config.getAutoCommitIntervalMs(),
-                config.getAutoCommitIntervalMs(),
-                TimeUnit.MILLISECONDS
-            );
-        }
+        // 移除 scheduler 相关自动提交线程实现
+        // this.scheduler = Executors.newScheduledThreadPool(1);
     }
 
     @Override
@@ -73,6 +65,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             }
         }
         offsetManager.fetchCommittedOffsets(topics, topicPartitions);
+        // 移除 subscribe 中自动提交线程启动逻辑
     }
 
     @Override
@@ -125,6 +118,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                             long firstOffset = records.get(0).getOffset();
                             long lastOffset = records.get(records.size() - 1).getOffset();
                             System.out.printf("[Poll] 拉取到%d条消息, offset范围: [%d, %d]\n", records.size(), firstOffset, lastOffset);
+                            System.out.printf("[DEBUG] poll调用updateOffset: topic=%s, partition=%d, offset=%d\n", topic, partition, lastOffset+1);
                             offsetManager.updateOffset(topic, partition, lastOffset + 1);
                         } else {
                             System.out.printf("[Poll] topic=%s, partition=%d, fetched=0%n", topic, partition);
@@ -154,14 +148,22 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_POLL);
             metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_POLL, endTime - startTime);
             System.out.printf("[Poll] 本次总共拉取消息数: %d\n", allRecords.size());
+            System.out.printf("[DEBUG] poll finally, thread=%s, enableAutoCommit=%s\n", Thread.currentThread().getName(), config.isEnableAutoCommit());
+            if (config.isEnableAutoCommit()) {
+                System.out.println("[DEBUG] poll finally自动提交offset");
+                commitSync();
+            } else {
+                System.out.println("[DEBUG] poll finally调用commitSync");
             commitSync();
-            System.out.println("[Poll] offset 提交完成");
+                System.out.println("[Poll] offset 手动提交完成");
+            }
         }
         return allRecords;
     }
 
     @Override
     public void commitSync() {
+        System.out.printf("[DEBUG] commitSync入口, thread=%s\n", Thread.currentThread().getName());
         if (closed.get()) {
             throw new IllegalStateException("Consumer is closed");
         }
@@ -178,6 +180,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
 
     @Override
     public void commitAsync() {
+        System.out.printf("[DEBUG] commitAsync入口, thread=%s\n", Thread.currentThread().getName());
         if (closed.get()) {
             throw new IllegalStateException("Consumer is closed");
         }
@@ -196,15 +199,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
     public void close() {
         if (closed.compareAndSet(false, true)) {
             try {
-                // 停止自动提交调度器
-                scheduler.shutdown();
-                try {
-                    if (!scheduler.awaitTermination(5000, TimeUnit.MILLISECONDS)) {
-                        scheduler.shutdownNow();
-                    }
-                } catch (InterruptedException e) {
-                    scheduler.shutdownNow();
-                }
+                // 移除 scheduler 相关自动提交线程关闭逻辑
+                // 在 close 方法中无需 shutdown scheduler
 
                 // 最后一次提交offset
                 if (config.isEnableAutoCommit()) {

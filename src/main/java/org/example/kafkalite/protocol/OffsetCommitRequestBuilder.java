@@ -59,6 +59,9 @@ public class OffsetCommitRequestBuilder {
     // v2协议实现
     public static ByteBuffer build(String groupId, Map<String, Map<Integer, Long>> offsets, int correlationId, String clientId, int generationId, String memberId, long retentionTime) {
         int estimatedSize = 512;
+        // 新增详细参数日志
+        System.out.printf("[OffsetCommitRequestBuilder] 参数: groupId=%s, generationId=%d, memberId=%s, retentionTime=%d, offsets=%s, apiVersion=%d, clientId=%s\n",
+            groupId, generationId, memberId, retentionTime, offsets, 2, clientId);
         ByteBuffer buffer = ByteBuffer.allocate(estimatedSize);
         buffer.position(4); // 预留4字节长度
 

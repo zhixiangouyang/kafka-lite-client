@@ -37,7 +37,7 @@ public class OffsetManager {
             System.out.printf("[OffsetManager] offset=-1 for topic=%s, partition=%d, 使用latest offset\n", topic, partition);
             // 硬编码latest offset，后续可以改为动态获取
             if ("ouyangTest".equals(topic) && partition == 0) {
-                return 114169154L; // 线上topic的latest offset
+                return 0L; // 线上topic的latest offset
             }
             return 0L; // 其他topic的fallback
         }
@@ -60,7 +60,13 @@ public class OffsetManager {
     }
     // v2协议重载
     public synchronized void commitSync(int generationId, String memberId) {
+        System.out.printf("[DEBUG] OffsetManager.commitSync called, thread=%s, generationId=%d, memberId=%s, offsets=%s\n", Thread.currentThread().getName(), generationId, memberId, offsets);
+        if (generationId <= 0 || memberId == null || memberId.isEmpty()) {
+            System.out.printf("[WARN] group未稳定，跳过本次offset提交: generationId=%d, memberId=%s\n", generationId, memberId);
+            return;
+        }
         try {
+            System.out.printf("[DEBUG] commitSync: generationId=%d, memberId=%s, offsets=%s\n", generationId, memberId, offsets);
             System.out.println("[DEBUG] offsets to commit: " + offsets);
             // 1. 构造 OffsetCommitRequest v2
             ByteBuffer request = OffsetCommitRequestBuilder.build(
@@ -109,6 +115,7 @@ public class OffsetManager {
 
     // 异步提交
     public void commitAsync() {
+        System.out.printf("[DEBUG] OffsetManager.commitAsync called, thread=%s\n", Thread.currentThread().getName());
         new Thread(this::commitSync).start();
     }
 

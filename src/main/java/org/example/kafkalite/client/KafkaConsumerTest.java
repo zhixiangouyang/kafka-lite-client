@@ -18,7 +18,6 @@ public class KafkaConsumerTest {
         ConsumerConfig config = new ConsumerConfig();
         config.setEnableAutoCommit(true);           // 启用自动提交
         config.setAutoCommitIntervalMs(5000);       // 自动提交间隔5秒
-        config.setMaxPollRecords(500);              // 单次最多拉取500条消息
         config.setFetchMaxBytes(1024 * 1024);       // 单次最多拉取1MB数据
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
@@ -33,7 +32,7 @@ public class KafkaConsumerTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("ouyangTest"));
+            consumer.subscribe(Arrays.asList("ouyangTest1"));
 
             System.out.println("开始消费消息...");
             System.out.println("按 Ctrl+C 停止消费");
@@ -45,13 +44,13 @@ public class KafkaConsumerTest {
                 
                 // 打印消费到的消息
                 for (ConsumerRecord record : records) {
-                    System.out.printf("收到消息: topic=%s, partition=%d, offset=%d, key=%s, value=%s%n",
-                        record.getTopic(),
-                        record.getPartition(),
-                        record.getOffset(),
-                        record.getKey(),
-                        record.getValue()
-                    );
+                    // System.out.printf("收到消息: topic=%s, partition=%d, offset=%d, key=%s, value=%s%n",
+                    //     record.getTopic(),
+                    //     record.getPartition(),
+                    //     record.getOffset(),
+                    //     record.getKey(),
+                    //     record.getValue()
+                    // );
                 }
 
                 // 如果是手动提交，在这里提交

@@ -92,11 +92,14 @@ public class JoinGroupRequestBuilder {
         
         buffer.flip();
             
-            // 打印请求字节
+        // 打印请求字节流
             byte[] bytes = new byte[buffer.remaining()];
+        buffer.mark();
             buffer.get(bytes);
-            buffer.rewind();
-            // System.out.println("[JoinGroupRequestBuilder] Request bytes: " + bytesToHex(bytes));
+        buffer.reset();
+        System.out.print("[JoinGroupRequestBuilder] 请求字节流: ");
+        for (byte b : bytes) System.out.printf("%02x ", b);
+        System.out.println();
             
         return buffer;
             

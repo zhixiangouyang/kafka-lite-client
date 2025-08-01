@@ -70,6 +70,7 @@ public class ConsumerCoordinator {
             
             this.memberId = result.getMemberId();
             this.generationId = result.getGenerationId();
+            System.out.printf("[ConsumerCoordinator] joinGroup success: generationId=%d, memberId=%s\n", this.generationId, this.memberId);
             // System.out.println("[ConsumerCoordinator] Joined group: " + result);
             
         } catch (Exception e) {
@@ -88,6 +89,7 @@ public class ConsumerCoordinator {
             }
             
             this.assignments = result.getAssignments();
+            System.out.printf("[ConsumerCoordinator] syncGroup success: assignments=%s\n", this.assignments);
             // System.out.println("[ConsumerCoordinator] Synced group, assignments: " + result.getAssignments());
             
         } catch (Exception e) {

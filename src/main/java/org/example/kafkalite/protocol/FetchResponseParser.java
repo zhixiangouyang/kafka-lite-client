@@ -22,22 +22,22 @@ public class FetchResponseParser {
             buffer.mark();
             buffer.get(preview);
             buffer.reset();
-            System.out.print("[FetchResponseParser] 响应前32字节: ");
-            for (byte b : preview) {
-                System.out.printf("%02x ", b);
-            }
-            System.out.printf(" 剩余字节: %d\n", buffer.remaining());
+            // System.out.print("[FetchResponseParser] 响应前32字节: ");
+            // for (byte b : preview) {
+            //     System.out.printf("%02x ", b);
+            // }
+            // System.out.printf(" 剩余字节: %d\n", buffer.remaining());
 
             // 跳过total length字段
             buffer.getInt();
         int correlationId = buffer.getInt();  // 响应头
 
             int topicCount = buffer.getInt(); // int32
-            System.out.printf("[FetchResponseParser] topicCount=%d\n", topicCount);
+            // System.out.printf("[FetchResponseParser] topicCount=%d\n", topicCount);
         for (int i = 0; i < topicCount; i++) {
                 String topic = readString(buffer);
                 int partitionCount = buffer.getInt(); // 必须用int32
-                System.out.printf("[FetchResponseParser] topic=%s, partitionCount=%d\n", topic, partitionCount);
+                // System.out.printf("f[FetchResponseParser] topic=%s, partitionCount=%d\n", topic, partitionCount);
             for (int j = 0; j < partitionCount; j++) {
                 int partition = buffer.getInt();
                 short errorCode = buffer.getShort();
@@ -45,20 +45,20 @@ public class FetchResponseParser {
 
                 int messageSetSize = buffer.getInt();
                 int messageSetEnd = buffer.position() + messageSetSize;
-                    System.out.printf("[FetchResponseParser] topic=%s, partition=%d, messageSetSize=%d, bufferPos=%d\n",
-                        topic, partition, messageSetSize, buffer.position());
+                    // System.out.printf("[FetchResponseParser] topic=%s, partition=%d, messageSetSize=%d, bufferPos=%d\n",
+                    //     topic, partition, messageSetSize, buffer.position());
 
                 while (buffer.position() < messageSetEnd) {
                     int curPos = buffer.position();
                     if (curPos + 12 > messageSetEnd) { // offset(8)+messageSize(4)
-                        System.err.printf("[FetchResponseParser] break: curPos=%d, messageSetEnd=%d, 剩余=%d\n", curPos, messageSetEnd, messageSetEnd-curPos);
+                        // System.err.printf("[FetchResponseParser] break: curPos=%d, messageSetEnd=%d, 剩余=%d\n", curPos, messageSetEnd, messageSetEnd-curPos);
                         break;
                     }
                     long offset = buffer.getLong();
                     int messageSize = buffer.getInt();
                     int messageEnd = buffer.position() + messageSize;
                     if (messageEnd > messageSetEnd) {
-                        System.err.printf("[FetchResponseParser] messageEnd越界: messageEnd=%d, messageSetEnd=%d, offset=%d, messageSize=%d\n", messageEnd, messageSetEnd, offset, messageSize);
+                        // System.err.printf("[FetchResponseParser] messageEnd越界: messageEnd=%d, messageSetEnd=%d, offset=%d, messageSize=%d\n", messageEnd, messageSetEnd, offset, messageSize);
                         break;
                     }
                     int msgStart = buffer.position();
@@ -79,8 +79,8 @@ public class FetchResponseParser {
                         buffer.get(valueBytes);
                         value = new String(valueBytes, StandardCharsets.UTF_8);
                     }
-                    System.out.printf("[FetchResponseParser] offset=%d, messageSize=%d, keyLen=%d, valueLen=%d, msgStart=%d, msgEnd=%d, key=%s, value=%s\n",
-                        offset, messageSize, keyLen, valueLen, msgStart, buffer.position(), key, value);
+                    // System.out.printf("[FetchResponseParser] offset=%d, messageSize=%d, keyLen=%d, valueLen=%d, msgStart=%d, msgEnd=%d, key=%s, value=%s\n",
+                    //     offset, messageSize, keyLen, valueLen, msgStart, buffer.position(), key, value);
                     records.add(new ConsumerRecord(topic, partition, offset, key, value));
                     buffer.position(messageEnd);
                 }
@@ -90,7 +90,7 @@ public class FetchResponseParser {
             System.err.println("[FetchResponseParser] 解析异常: " + e.getMessage());
             e.printStackTrace();
         }
-        System.out.printf("[DEBUG] FetchResponseParser.parse 返回 records.size()=%d\n", records.size());
+        // System.out.printf("[DEBUG] FetchResponseParser.parse 返回 records.size()=%d\n", records.size());
         return  records;
     }
 
@@ -101,7 +101,7 @@ public class FetchResponseParser {
         byte[] bytes = new byte[len];
         buffer.get(bytes);
         String str = new String(bytes, StandardCharsets.UTF_8);
-        System.out.printf("[readString] posBefore=%d, len=%d, posAfter=%d, str=%s\n", posBefore, len, buffer.position(), str);
+        // System.out.printf("[readString] posBefore=%d, len=%d, posAfter=%d, str=%s\n", posBefore, len, buffer.position(), str);
         return str;
     }
 }
