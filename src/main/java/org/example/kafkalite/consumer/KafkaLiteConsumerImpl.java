@@ -79,7 +79,10 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         List<ConsumerRecord> allRecords = new ArrayList<>();
         System.out.println("[Poll] 开始拉取消息...");
         List<PartitionAssignment> assignments = coordinator.getAssignments();
-        System.out.println("[Poll] 当前分区分配: " + assignments);
+        System.out.printf("[Poll] 当前分区分配: %s, coordinator.isStable()=%s, coordinator.isRejoining()=%s\n", 
+            assignments, coordinator.isStable(), coordinator.isRejoining());
+        System.out.printf("[DEBUG] Poll check - clientId=%s, groupId=%s, memberId=%s, generationId=%d\n", 
+            clientId, groupId, coordinator.getMemberId(), coordinator.getGenerationId());
         try {
             if (assignments == null || assignments.isEmpty()) {
                 System.out.println("[Poll] 当前无分区分配，等待分配变更...");
@@ -88,6 +91,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                 }
                 // 再次获取分配
                 assignments = coordinator.getAssignments();
+                System.out.printf("[Poll] 等待后分区分配: %s\n", assignments);
                 if (assignments == null || assignments.isEmpty()) {
                     System.out.println("[Poll] 等待后仍无分区分配，返回空结果");
                     return allRecords;

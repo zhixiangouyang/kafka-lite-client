@@ -112,7 +112,7 @@ public class ConsumerCoordinator {
     }
     
     private void joinGroupWithRetry(int retryCount) {
-        System.out.printf("[DEBUG] joinGroupWithRetry: retryCount=%d, clientId=%s\n", retryCount, clientId);
+        System.out.printf("[DEBUG] joinGroupWithRetry: retryCount=%d, clientId=%s, groupId=%s, memberId=%s\n", retryCount, clientId, groupId, memberId);
         try {
             groupState = GroupState.REBALANCING;
             System.out.printf("[DEBUG] joinGroup: clientId=%s, groupId=%s, memberId=%s, topics=%s, retryCount=%d\n", clientId, groupId, memberId, subscribedTopics, retryCount);
@@ -132,6 +132,9 @@ public class ConsumerCoordinator {
             ByteBuffer request = JoinGroupRequestBuilder.build(clientId, groupId, memberId, subscribedTopics);
             ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             JoinGroupResponseParser.JoinGroupResult result = JoinGroupResponseParser.parse(response);
+            
+            System.out.printf("[DEBUG] JoinGroup response received: errorCode=%d, generationId=%d, leaderId=%s, memberId=%s, members=%s\n", 
+                result.getErrorCode(), result.getGenerationId(), result.getLeaderId(), result.getMemberId(), result.getMembers());
             
             if (result.getErrorCode() != 0) {
                 throw new RuntimeException("Failed to join group: error=" + result.getErrorCode());
@@ -205,7 +208,8 @@ public class ConsumerCoordinator {
     }
     
     private void syncGroupWithRetry(int retryCount) {
-        System.out.printf("[DEBUG] syncGroupWithRetry: retryCount=%d, clientId=%s\n", retryCount, clientId);
+        System.out.printf("[DEBUG] syncGroupWithRetry: retryCount=%d, clientId=%s, groupId=%s, memberId=%s, isLeader=%s\n", 
+            retryCount, clientId, groupId, memberId, isLeader);
         try {
             groupState = GroupState.REBALANCING;
             ByteBuffer request;
@@ -221,6 +225,8 @@ public class ConsumerCoordinator {
                 Map<String, List<PartitionAssignment>> assignments = calculatePartitionAssignments();
                 request = SyncGroupRequestBuilder.buildWithAssignments(clientId, groupId, generationId, memberId, assignments);
                 System.out.printf("[ConsumerCoordinator] Leader sending assignments: %s\n", assignments);
+                System.out.printf("[DEBUG] Leader syncGroup - clientId=%s, allMembers=%s, assignments=%s\n", 
+                    clientId, allMembers, assignments);
                 // Leader分配后不再主动rejoinGroup，只需正常syncGroup
                 try {
                     ByteBuffer heartbeatReq = HeartbeatRequestBuilder.build(clientId, groupId, generationId, memberId);
@@ -245,6 +251,10 @@ public class ConsumerCoordinator {
             }
             ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             SyncGroupResponseParser.SyncGroupResult result = SyncGroupResponseParser.parse(response);
+            
+            System.out.printf("[DEBUG] SyncGroup response received: errorCode=%d, assignments.size=%d, assignments=%s\n", 
+                result.getErrorCode(), result.getAssignments().size(), result.getAssignments());
+            
             if (result.getErrorCode() != 0) {
                 // 特殊处理 REBALANCE_IN_PROGRESS/ILLEGAL_GENERATION 错误
                 if ((result.getErrorCode() == 27 || result.getErrorCode() == 25 || result.getErrorCode() == 22) && retryCount < 10) {
@@ -257,6 +267,8 @@ public class ConsumerCoordinator {
             }
             this.assignments = result.getAssignments();
             System.out.printf("[ConsumerCoordinator] syncGroup success: assignments=%s\n", this.assignments);
+            System.out.printf("[DEBUG] syncGroup completed: clientId=%s, memberId=%s, isLeader=%s, assignments.size=%d\n", 
+                clientId, memberId, isLeader, this.assignments.size());
             
             // 新增：如果非Leader收到空的分配信息，记录警告但继续执行
             if (!this.isLeader && this.assignments.isEmpty()) {
@@ -264,6 +276,8 @@ public class ConsumerCoordinator {
             }
             
             groupState = GroupState.STABLE;
+            System.out.printf("[DEBUG] Group state changed to STABLE: clientId=%s, groupId=%s, memberId=%s\n", 
+                clientId, groupId, memberId);
             synchronized (assignmentLock) {
                 assignmentLock.notifyAll();
             }
@@ -286,7 +300,8 @@ public class ConsumerCoordinator {
     }
     
     private void startHeartbeat() {
-        System.out.printf("[DEBUG] startHeartbeat: clientId=%s, groupId=%s\n", clientId, groupId);
+        System.out.printf("[DEBUG] startHeartbeat: clientId=%s, groupId=%s, memberId=%s, generationId=%d\n", 
+            clientId, groupId, memberId, generationId);
         if (heartbeatExecutor != null) {
             heartbeatExecutor.shutdown();
         }
@@ -296,33 +311,53 @@ public class ConsumerCoordinator {
             try {
                 // 如果正在重新加入组，跳过本次心跳
                 if (isRejoining) {
-                    System.out.println("[ConsumerCoordinator] Skipping heartbeat due to rejoin in progress");
+                    System.out.printf("[DEBUG] Skipping heartbeat due to rejoin in progress: clientId=%s, groupId=%s\n", clientId, groupId);
                     return;
                 }
+                
+                // 新增：检查当前状态
+                System.out.printf("[DEBUG] Heartbeat check - clientId=%s, groupId=%s, memberId=%s, generationId=%d, groupState=%s, assignments.size=%d\n", 
+                    clientId, groupId, memberId, generationId, groupState, assignments.size());
+                
                 System.out.printf("[DEBUG] Heartbeat thread running: clientId=%s, groupId=%s\n", clientId, groupId);
                 ByteBuffer request = HeartbeatRequestBuilder.build(clientId, groupId, generationId, memberId);
-                // System.out.printf("[HeartbeatRequestBuilder] 请求字节流: %s\n", bytesToHex(request));
+                
+                // 新增：打印心跳请求详情
+                System.out.printf("[DEBUG] Sending heartbeat - clientId=%s, groupId=%s, memberId=%s, generationId=%d\n", 
+                    clientId, groupId, memberId, generationId);
+                
                 ByteBuffer response = coordinatorSocket.sendAndReceive(request);
                 short errorCode = HeartbeatResponseParser.parse(response);
-                System.out.printf("[HeartbeatResponse] errorCode=%d\n", errorCode);
+                System.out.printf("[HeartbeatResponse] errorCode=%d for clientId=%s, groupId=%s, memberId=%s\n", 
+                    errorCode, clientId, groupId, memberId);
+                
                 if (errorCode == 0) {
-                    System.out.println("[ConsumerCoordinator] Heartbeat success");
+                    System.out.printf("[ConsumerCoordinator] Heartbeat success for clientId=%s, groupId=%s\n", clientId, groupId);
+                    
+                    // 新增：定期检测组成员变化
+                    heartbeatCounter++;
+                    if (heartbeatCounter >= MEMBERSHIP_CHECK_INTERVAL) {
+                        System.out.printf("[DEBUG] Performing periodic membership check for clientId=%s (heartbeatCounter=%d)\n", clientId, heartbeatCounter);
+                        checkGroupMembership();
+                        heartbeatCounter = 0; // 重置计数器
+                    }
+                    
                 } else if (errorCode == 25) { // REBALANCE_IN_PROGRESS
-                    System.out.println("[ConsumerCoordinator] Rebalance in progress, will rejoin group");
+                    System.out.printf("[ConsumerCoordinator] Rebalance in progress detected! clientId=%s, groupId=%s, will rejoin group\n", clientId, groupId);
                     // 重新加入组
                     rejoinGroup();
                 } else if (errorCode == 22) { // ILLEGAL_GENERATION
-                    System.err.println("[ConsumerCoordinator] Illegal generation, will rejoin group");
+                    System.err.printf("[ConsumerCoordinator] Illegal generation detected! clientId=%s, groupId=%s, will rejoin group\n", clientId, groupId);
                     // 重新加入组
                     rejoinGroup();
                 } else {
-                    System.err.println("[ConsumerCoordinator] Heartbeat failed with error: " + errorCode);
+                    System.err.printf("[ConsumerCoordinator] Heartbeat failed with error: %d for clientId=%s, groupId=%s\n", errorCode, clientId, groupId);
                     // 对于其他错误，也尝试重新加入组
                     rejoinGroup();
                 }
                 
             } catch (Exception e) {
-                System.err.println("[ConsumerCoordinator] Failed to send heartbeat: " + e);
+                System.err.printf("[ConsumerCoordinator] Failed to send heartbeat for clientId=%s, groupId=%s: %s\n", clientId, groupId, e.getMessage());
                 // 心跳异常时也重新加入组
                 rejoinGroup();
             }
@@ -370,6 +405,7 @@ public class ConsumerCoordinator {
             groupState = GroupState.UNJOINED;
         } finally {
             isRejoining = false; // 重置标志
+            System.out.printf("[DEBUG] Rejoin completed, isRejoining=false: clientId=%s, groupId=%s\n", clientId, groupId);
         }
     }
     
@@ -521,4 +557,74 @@ public class ConsumerCoordinator {
     public void setOnSocketUpdatedCallback(Runnable callback) {
         this.onSocketUpdatedCallback = callback;
     }
+
+    // 新增：主动检测组成员变化的方法
+    private void checkGroupMembership() {
+        try {
+            System.out.printf("[DEBUG] checkGroupMembership: clientId=%s, groupId=%s, memberId=%s, allMembers.size=%d\n", 
+                clientId, groupId, memberId, allMembers.size());
+            
+            // 如果正在重新加入组，跳过检测
+            if (isRejoining) {
+                System.out.printf("[DEBUG] Skipping membership check due to rejoin in progress: clientId=%s\n", clientId);
+                return;
+            }
+            
+            // 构造一个简单的JoinGroup请求来获取当前组成员信息
+            ByteBuffer request = JoinGroupRequestBuilder.build(clientId, groupId, memberId, subscribedTopics);
+            ByteBuffer response = coordinatorSocket.sendAndReceive(request);
+            JoinGroupResponseParser.JoinGroupResult result = JoinGroupResponseParser.parse(response);
+            
+            System.out.printf("[DEBUG] Membership check response: errorCode=%d, members=%s, current allMembers=%s\n", 
+                result.getErrorCode(), result.getMembers(), allMembers);
+            
+            if (result.getErrorCode() == 0) {
+                // 检查组成员是否有变化
+                List<String> currentMembers = result.getMembers();
+                boolean membershipChanged = false;
+                
+                // 检查成员数量变化
+                if (currentMembers.size() != allMembers.size()) {
+                    membershipChanged = true;
+                    System.out.printf("[DEBUG] Member count changed: old=%d, new=%d\n", allMembers.size(), currentMembers.size());
+                }
+                
+                // 检查具体成员变化
+                for (String member : currentMembers) {
+                    boolean found = allMembers.stream().anyMatch(m -> m.getMemberId().equals(member));
+                    if (!found) {
+                        membershipChanged = true;
+                        System.out.printf("[DEBUG] New member detected: %s\n", member);
+                    }
+                }
+                
+                for (MemberInfo member : allMembers) {
+                    boolean found = currentMembers.contains(member.getMemberId());
+                    if (!found) {
+                        membershipChanged = true;
+                        System.out.printf("[DEBUG] Member left: %s\n", member.getMemberId());
+                    }
+                }
+                
+                if (membershipChanged) {
+                    System.out.printf("[DEBUG] Group membership changed! Triggering rejoin for clientId=%s\n", clientId);
+                    rejoinGroup();
+                } else {
+                    System.out.printf("[DEBUG] No membership change detected for clientId=%s\n", clientId);
+                }
+            } else if (result.getErrorCode() == 25) { // REBALANCE_IN_PROGRESS
+                System.out.printf("[DEBUG] Rebalance in progress detected during membership check for clientId=%s\n", clientId);
+                rejoinGroup();
+            } else {
+                System.out.printf("[DEBUG] Membership check failed with error: %d for clientId=%s\n", result.getErrorCode(), clientId);
+            }
+            
+        } catch (Exception e) {
+            System.err.printf("[DEBUG] Membership check failed for clientId=%s: %s\n", clientId, e.getMessage());
+        }
+    }
+    
+    // 新增：心跳计数器，用于定期检测组成员变化
+    private int heartbeatCounter = 0;
+    private static final int MEMBERSHIP_CHECK_INTERVAL = 5; // 每5次心跳检测一次组成员变化
 } 

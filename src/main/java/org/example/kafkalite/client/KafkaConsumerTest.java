@@ -42,7 +42,7 @@ public class KafkaConsumerTest {
 
         // 3. 创建消费者实例
         consumer = new KafkaLiteConsumerImpl(
-            "test-group-1-3",                    // 消费者组ID
+            "test-group-1-19",                    // 消费者组ID
             Arrays.asList(broker),           // Kafka集群地址
             config                           // 配置
         );
