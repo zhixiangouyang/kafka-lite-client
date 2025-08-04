@@ -8,6 +8,11 @@ public class ConsumerConfig {
     private int maxRetries = 3;
     private long retryBackoffMs = 100;
     private long heartbeatIntervalMs = 3000;
+    
+    // 新增：定期元数据刷新相关配置
+    private boolean enablePeriodicMetadataRefresh = true;
+    private long metadataRefreshIntervalMs = 300000; // 5分钟
+    private int metadataConnectionPoolSize = 10; // 元数据连接池大小
 
     public boolean isEnableAutoCommit() {
         return enableAutoCommit;
@@ -63,5 +68,30 @@ public class ConsumerConfig {
 
     public void setHeartbeatIntervalMs(long heartbeatIntervalMs) {
         this.heartbeatIntervalMs = heartbeatIntervalMs;
+    }
+    
+    // 新增：定期元数据刷新相关getter/setter
+    public boolean isEnablePeriodicMetadataRefresh() {
+        return enablePeriodicMetadataRefresh;
+    }
+
+    public void setEnablePeriodicMetadataRefresh(boolean enablePeriodicMetadataRefresh) {
+        this.enablePeriodicMetadataRefresh = enablePeriodicMetadataRefresh;
+    }
+
+    public long getMetadataRefreshIntervalMs() {
+        return metadataRefreshIntervalMs;
+    }
+
+    public void setMetadataRefreshIntervalMs(long metadataRefreshIntervalMs) {
+        this.metadataRefreshIntervalMs = metadataRefreshIntervalMs;
+    }
+
+    public int getMetadataConnectionPoolSize() {
+        return metadataConnectionPoolSize;
+    }
+
+    public void setMetadataConnectionPoolSize(int metadataConnectionPoolSize) {
+        this.metadataConnectionPoolSize = metadataConnectionPoolSize;
     }
 } 

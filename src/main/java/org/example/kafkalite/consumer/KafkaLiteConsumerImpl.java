@@ -27,23 +27,25 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
     private List<String> subscribedTopics = new ArrayList<>();
     private final Map<String, Map<Integer, String>> topicPartitionLeaders = new HashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
-    // 移除 scheduler 相关自动提交线程实现
-    // private final ScheduledExecutorService scheduler;
-
+    
+    // 新增：定期元数据刷新相关
+    private ScheduledExecutorService metadataRefreshExecutor;
+    private final AtomicBoolean metadataRefreshStarted = new AtomicBoolean(false);
+    
     public KafkaLiteConsumerImpl(String groupId, List<String> bootstrapServers, ConsumerConfig config) {
         this.groupId = groupId;
         this.bootstrapServers = bootstrapServers;
         this.config = config;
         this.clientId = "kafka-lite-" + UUID.randomUUID().toString().substring(0, 8);
-        this.metadataManager = new MetadataManagerImpl(bootstrapServers);
+        
+        // 使用配置的连接池大小创建MetadataManager
+        this.metadataManager = new MetadataManagerImpl(bootstrapServers, config.getMetadataConnectionPoolSize());
         this.offsetManager = new OffsetManager(groupId, bootstrapServers);
         this.metricsCollector = new MetricsCollector();
         this.coordinator = new ConsumerCoordinator(clientId, groupId, config, bootstrapServers);
         this.offsetManager.setCoordinator(this.coordinator);
         // 新增：注入coordinatorSocket
         this.offsetManager.setCoordinatorSocket(this.coordinator.coordinatorSocket);
-        // 移除 scheduler 相关自动提交线程实现
-        // this.scheduler = Executors.newScheduledThreadPool(1);
     }
 
     @Override
@@ -67,7 +69,73 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             }
         }
         offsetManager.fetchCommittedOffsets(topics, topicPartitions);
-        // 移除 subscribe 中自动提交线程启动逻辑
+        
+        // 新增：启动定期元数据刷新
+        startPeriodicMetadataRefresh();
+    }
+    
+    // 新增：启动定期元数据刷新
+    private void startPeriodicMetadataRefresh() {
+        if (!config.isEnablePeriodicMetadataRefresh()) {
+            System.out.println("[KafkaLiteConsumerImpl] 定期元数据刷新已禁用");
+            return;
+        }
+        
+        if (metadataRefreshStarted.compareAndSet(false, true)) {
+            metadataRefreshExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "metadata-refresh-" + clientId);
+                t.setDaemon(true);
+                return t;
+            });
+            
+            long intervalMs = config.getMetadataRefreshIntervalMs();
+            System.out.printf("[KafkaLiteConsumerImpl] 启动定期元数据刷新: 间隔=%dms, 客户端=%s\n", intervalMs, clientId);
+            
+            metadataRefreshExecutor.scheduleAtFixedRate(() -> {
+                try {
+                    if (closed.get()) {
+                        return;
+                    }
+                    
+                    System.out.printf("[KafkaLiteConsumerImpl] 执行定期元数据刷新: 客户端=%s, topics=%s\n", clientId, subscribedTopics);
+                    
+                    // 刷新所有订阅的topic的元数据
+                    for (String topic : subscribedTopics) {
+                        try {
+                            metadataManager.refreshMetadata(topic);
+                            Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
+                            topicPartitionLeaders.put(topic, leaders);
+                            
+                            System.out.printf("[KafkaLiteConsumerImpl] 定期刷新完成: topic=%s, leaders=%s\n", topic, leaders);
+                        } catch (Exception e) {
+                            System.err.printf("[KafkaLiteConsumerImpl] 定期刷新元数据失败: topic=%s, 错误=%s\n", topic, e.getMessage());
+                        }
+                    }
+                    
+                } catch (Exception e) {
+                    System.err.printf("[KafkaLiteConsumerImpl] 定期元数据刷新异常: 客户端=%s, 错误=%s\n", clientId, e.getMessage());
+                }
+            }, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+            
+            System.out.printf("[KafkaLiteConsumerImpl] 定期元数据刷新已启动: 客户端=%s\n", clientId);
+        }
+    }
+    
+    // 新增：停止定期元数据刷新
+    private void stopPeriodicMetadataRefresh() {
+        if (metadataRefreshExecutor != null) {
+            System.out.printf("[KafkaLiteConsumerImpl] 停止定期元数据刷新: 客户端=%s\n", clientId);
+            metadataRefreshExecutor.shutdown();
+            try {
+                if (!metadataRefreshExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    metadataRefreshExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                metadataRefreshExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            metadataRefreshExecutor = null;
+        }
     }
 
     @Override
@@ -221,8 +289,18 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                     commitSync();
                 }
                 closed.set(true);
+                
+                // 新增：停止定期元数据刷新
+                stopPeriodicMetadataRefresh();
+                
                 coordinator.close();
                 offsetManager.close();
+                
+                // 新增：关闭MetadataManager（包括连接池）
+                if (metadataManager instanceof MetadataManagerImpl) {
+                    ((MetadataManagerImpl) metadataManager).close();
+                }
+                
             } finally {
                 // 清理资源
                 subscribedTopics = new ArrayList<>();

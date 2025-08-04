@@ -175,10 +175,14 @@ public class ConsumerCoordinator {
             System.out.printf("[DEBUG] joinGroup completed: clientId=%s, memberId=%s, isLeader=%s, allMembers.size=%d\n", 
                 clientId, this.memberId, this.isLeader, this.allMembers.size());
             
-            // 新增：检测ghost consumer问题
+            // 新增：检测ghost consumer问题（仅在多消费者场景下）
             if (this.isLeader && result.getMembers().size() == 1 && result.getMembers().get(0).equals(this.memberId)) {
-                System.out.printf("[WARN] Potential ghost consumer detected: Leader only sees itself in group\n");
-                // 如果是Leader且只看到自己，可能存在ghost consumer
+                // 检查是否有其他消费者应该在这个组中
+                // 这里我们通过检查是否有其他消费者在同一个组中运行来判断
+                // 暂时禁用这个检测，因为单消费者场景下这是正常行为
+                System.out.printf("[DEBUG] Leader only sees itself in group (this is normal for single consumer)\n");
+                // 注释掉ghost consumer检测逻辑，因为单消费者场景下这是正常行为
+                /*
                 if (retryCount < 1) {
                     System.out.printf("[INFO] Attempting to trigger rebalance to clean up ghost consumers (retryCount=%d)...\n", retryCount);
                     // 等待一段时间让服务端清理ghost consumer
@@ -186,6 +190,7 @@ public class ConsumerCoordinator {
                     joinGroupWithRetry(retryCount + 1);
                     return;
                 }
+                */
             }
             
         } catch (Exception e) {
