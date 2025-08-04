@@ -3,10 +3,14 @@ package org.example.kafkalite.consumer;
 import org.example.kafkalite.core.KafkaSocketClient;
 import org.example.kafkalite.core.KafkaSingleSocketClient;
 import org.example.kafkalite.protocol.*;
+import org.example.kafkalite.metadata.MetadataManager;
+import org.example.kafkalite.metadata.MetadataManagerImpl;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +30,14 @@ public class ConsumerCoordinator {
     private ScheduledExecutorService heartbeatExecutor;
     public KafkaSingleSocketClient coordinatorSocket;
     
+    // 新增：Leader选举和分区分配相关字段
+    private boolean isLeader = false;
+    private List<MemberInfo> allMembers = new ArrayList<>();
+    private PartitionAssignor partitionAssignor = new RangeAssignor();
+    private Runnable onSocketUpdatedCallback;
+    
+    private final MetadataManager metadataManager;
+    
     public enum GroupState { UNJOINED, REBALANCING, STABLE }
     private volatile GroupState groupState = GroupState.UNJOINED;
     private volatile boolean isRejoining = false; // 新增：防止重复重新加入组
@@ -36,6 +48,7 @@ public class ConsumerCoordinator {
         this.config = config;
         this.bootstrapServers = bootstrapServers; // 新增：保存bootstrapServers
         this.subscribedTopics = new ArrayList<>();
+        this.metadataManager = new MetadataManagerImpl(bootstrapServers);
     }
     
     public void initializeGroup(List<String> topics) {
@@ -92,9 +105,19 @@ public class ConsumerCoordinator {
             
             this.memberId = result.getMemberId();
             this.generationId = result.getGenerationId();
-            System.out.printf("[ConsumerCoordinator] joinGroup success: generationId=%d, memberId=%s\n", this.generationId, this.memberId);
-            groupState = GroupState.STABLE;
-            // System.out.println("[ConsumerCoordinator] Joined group: " + result);
+            
+            // 新增：Leader选举逻辑
+            this.isLeader = this.memberId.equals(result.getLeaderId());
+            
+            // 新增：解析所有成员信息
+            this.allMembers.clear();
+            for (String memberId : result.getMembers()) {
+                // 简化处理：假设所有成员都订阅相同的topics
+                this.allMembers.add(new MemberInfo(memberId, subscribedTopics));
+            }
+            
+            System.out.printf("[ConsumerCoordinator] joinGroup success: generationId=%d, memberId=%s, isLeader=%s, members=%s\n", 
+                this.generationId, this.memberId, this.isLeader, result.getMembers());
             
         } catch (Exception e) {
             groupState = GroupState.UNJOINED;
@@ -105,7 +128,19 @@ public class ConsumerCoordinator {
     private void syncGroup() {
         try {
             groupState = GroupState.REBALANCING;
-            ByteBuffer request = SyncGroupRequestBuilder.build(clientId, groupId, generationId, memberId, subscribedTopics);
+            
+            ByteBuffer request;
+            if (isLeader) {
+                // Leader需要计算分区分配
+                Map<String, List<PartitionAssignment>> assignments = calculatePartitionAssignments();
+                request = SyncGroupRequestBuilder.buildWithAssignments(clientId, groupId, generationId, assignments);
+                System.out.printf("[ConsumerCoordinator] Leader sending assignments: %s\n", assignments);
+            } else {
+                // 非Leader发送空的分配
+                request = SyncGroupRequestBuilder.build(clientId, groupId, generationId, memberId, subscribedTopics);
+                System.out.println("[ConsumerCoordinator] Non-leader sending empty assignment");
+            }
+            
             ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             SyncGroupResponseParser.SyncGroupResult result = SyncGroupResponseParser.parse(response);
             
@@ -116,7 +151,6 @@ public class ConsumerCoordinator {
             this.assignments = result.getAssignments();
             System.out.printf("[ConsumerCoordinator] syncGroup success: assignments=%s\n", this.assignments);
             groupState = GroupState.STABLE;
-            // System.out.println("[ConsumerCoordinator] Synced group, assignments: " + result.getAssignments());
             
         } catch (Exception e) {
             groupState = GroupState.UNJOINED;
@@ -253,5 +287,60 @@ public class ConsumerCoordinator {
         }
         buffer.reset();
         return sb.toString();
+    }
+    
+    // 新增：计算分区分配
+    private Map<String, List<PartitionAssignment>> calculatePartitionAssignments() {
+        try {
+            // 获取所有topic的分区信息
+            Map<String, List<Integer>> topicPartitions = getTopicPartitions();
+            // 新增：打印每个topic的分区leaders
+            for (String topic : topicPartitions.keySet()) {
+                if (metadataManager != null) {
+                    metadataManager.refreshMetadata(topic);
+                    Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
+                    System.out.println("[DEBUG] topic=" + topic + " 分区leaders: " + leaders);
+                }
+            }
+            // 使用分区分配策略进行分配
+            Map<String, List<PartitionAssignment>> assignments = partitionAssignor.assign(allMembers, topicPartitions);
+            
+            System.out.printf("[ConsumerCoordinator] Calculated assignments: %s\n", assignments);
+            return assignments;
+            
+        } catch (Exception e) {
+            System.err.println("[ConsumerCoordinator] Failed to calculate partition assignments: " + e.getMessage());
+            // 返回空分配作为fallback
+            Map<String, List<PartitionAssignment>> fallback = new HashMap<>();
+            for (MemberInfo member : allMembers) {
+                fallback.put(member.getMemberId(), new ArrayList<>());
+            }
+            return fallback;
+        }
+    }
+    
+    // 新增：获取topic分区信息
+    private Map<String, List<Integer>> getTopicPartitions() {
+        Map<String, List<Integer>> topicPartitions = new HashMap<>();
+        for (String topic : subscribedTopics) {
+            List<Integer> partitions = new ArrayList<>();
+            if (metadataManager != null) {
+                metadataManager.refreshMetadata(topic);
+                Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
+                if (leaders != null && !leaders.isEmpty()) {
+                    partitions.addAll(leaders.keySet());
+                }
+            }
+            if (partitions.isEmpty()) {
+                partitions.add(0); // fallback，防止空分区
+            }
+            topicPartitions.put(topic, partitions);
+        }
+        return topicPartitions;
+    }
+    
+    // 新增：设置socket更新回调
+    public void setOnSocketUpdatedCallback(Runnable callback) {
+        this.onSocketUpdatedCallback = callback;
     }
 } 

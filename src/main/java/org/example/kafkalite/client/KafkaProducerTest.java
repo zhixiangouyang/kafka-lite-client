@@ -166,7 +166,7 @@ public class KafkaProducerTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
                                 
                                 ProducerRecord record = new ProducerRecord(
-                                    "ouyangTest1",
+                                    "ouyangTest3",
                                     "key" + localIndex, 
                                     messageValue
                                 );

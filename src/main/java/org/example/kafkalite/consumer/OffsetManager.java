@@ -204,7 +204,10 @@ public class OffsetManager {
     // 异步提交
     public void commitAsync() {
         System.out.printf("[DEBUG] OffsetManager.commitAsync called, thread=%s\n", Thread.currentThread().getName());
-        new Thread(this::commitSync).start();
+        // 获取当前的generationId和memberId
+        int generationId = coordinator != null ? coordinator.getGenerationId() : -1;
+        String memberId = coordinator != null ? coordinator.getMemberId() : "";
+        new Thread(() -> commitSync(generationId, memberId)).start();
     }
 
     // 新增：从 broker 查询 group offset
@@ -212,14 +215,14 @@ public class OffsetManager {
         try {
             System.out.printf("[OffsetManager] 开始查询已提交的offset: groupId=%s, topics=%s\n", groupId, topics);
             // 构造请求参数
-            java.util.Map<String, Integer[]> topicParts = new java.util.HashMap<>();
+            Map<String, Integer[]> topicParts = new HashMap<>();
             for (String topic : topics) {
-                java.util.List<Integer> parts = topicPartitions.get(topic);
+                List<Integer> parts = topicPartitions.get(topic);
                 if (parts != null) {
                     topicParts.put(topic, parts.toArray(new Integer[0]));
                 }
             }
-            java.nio.ByteBuffer request = org.example.kafkalite.protocol.OffsetFetchRequestBuilder.build(
+            ByteBuffer request = OffsetFetchRequestBuilder.build(
                     groupId, topicParts, 1, "kafka-lite"
             );
             
@@ -238,18 +241,18 @@ public class OffsetManager {
                 }
             } else {
                 // 回退到使用bootstrap server
-                String brokerAddress = bootstrapServers.get(0);
-                String[] parts = brokerAddress.split(":");
-                String host = parts[0];
-                int port = Integer.parseInt(parts[1]);
+            String brokerAddress = bootstrapServers.get(0);
+            String[] parts = brokerAddress.split(":");
+            String host = parts[0];
+            int port = Integer.parseInt(parts[1]);
                 System.out.printf("[OffsetManager] 使用bootstrap server查询offset: %s:%d\n", host, port);
-                java.nio.ByteBuffer response = org.example.kafkalite.core.KafkaSocketClient.sendAndReceive(host, port, request);
-                java.util.Map<String, java.util.Map<Integer, Long>> committed = org.example.kafkalite.protocol.OffsetFetchResponseParser.parse(response);
+            java.nio.ByteBuffer response = org.example.kafkalite.core.KafkaSocketClient.sendAndReceive(host, port, request);
+            java.util.Map<String, java.util.Map<Integer, Long>> committed = org.example.kafkalite.protocol.OffsetFetchResponseParser.parse(response);
                 System.out.printf("[OffsetManager] 查询到的已提交offset: %s\n", committed);
-                for (java.util.Map.Entry<String, java.util.Map<Integer, Long>> entry : committed.entrySet()) {
-                    String topic = entry.getKey();
-                    for (java.util.Map.Entry<Integer, Long> part : entry.getValue().entrySet()) {
-                        updateOffset(topic, part.getKey(), part.getValue());
+            for (java.util.Map.Entry<String, java.util.Map<Integer, Long>> entry : committed.entrySet()) {
+                String topic = entry.getKey();
+                for (java.util.Map.Entry<Integer, Long> part : entry.getValue().entrySet()) {
+                    updateOffset(topic, part.getKey(), part.getValue());
                     }
                 }
             }
