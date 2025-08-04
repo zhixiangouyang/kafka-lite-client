@@ -36,6 +36,9 @@ public class ConsumerCoordinator {
     private PartitionAssignor partitionAssignor = new RangeAssignor();
     private Runnable onSocketUpdatedCallback;
     
+    // 用于分区分配变更通知
+    public final Object assignmentLock = new Object();
+    
     private final MetadataManager metadataManager;
     
     public enum GroupState { UNJOINED, REBALANCING, STABLE }
@@ -56,6 +59,7 @@ public class ConsumerCoordinator {
         this.subscribedTopics.addAll(topics);
         try {
             groupState = GroupState.REBALANCING;
+            System.out.printf("[DEBUG] initializeGroup: clientId=%s, groupId=%s, memberId=%s, topics=%s\n", clientId, groupId, memberId, topics);
             findCoordinator();
             this.coordinatorSocket = new KafkaSingleSocketClient(coordinatorHost, coordinatorPort);
             joinGroup();
@@ -93,8 +97,27 @@ public class ConsumerCoordinator {
     }
     
     private void joinGroup() {
+        joinGroupWithRetry(0);
+    }
+    
+    private void joinGroupWithRetry(int retryCount) {
+        System.out.printf("[DEBUG] joinGroupWithRetry: retryCount=%d, clientId=%s\n", retryCount, clientId);
         try {
             groupState = GroupState.REBALANCING;
+            System.out.printf("[DEBUG] joinGroup: clientId=%s, groupId=%s, memberId=%s, topics=%s, retryCount=%d\n", clientId, groupId, memberId, subscribedTopics, retryCount);
+            
+            // 如果是重试，先等待一段时间让 Coordinator 处理完之前的请求
+            if (retryCount > 0) {
+                int waitTime = 2000; // 固定2秒
+                System.out.printf("[DEBUG] Waiting %d ms before retry...\n", waitTime);
+                try {
+                    Thread.sleep(waitTime);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during joinGroup retry", ie);
+                }
+            }
+            
             ByteBuffer request = JoinGroupRequestBuilder.build(clientId, groupId, memberId, subscribedTopics);
             ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             JoinGroupResponseParser.JoinGroupResult result = JoinGroupResponseParser.parse(response);
@@ -103,62 +126,143 @@ public class ConsumerCoordinator {
                 throw new RuntimeException("Failed to join group: error=" + result.getErrorCode());
             }
             
-            this.memberId = result.getMemberId();
-            this.generationId = result.getGenerationId();
+            // 保存新的memberId和generationId
+            String newMemberId = result.getMemberId();
+            int newGenerationId = result.getGenerationId();
+            
+            // 只有在memberId不为空时才更新
+            if (newMemberId != null && !newMemberId.isEmpty()) {
+                this.memberId = newMemberId;
+            }
+            this.generationId = newGenerationId;
             
             // 新增：Leader选举逻辑
             this.isLeader = this.memberId.equals(result.getLeaderId());
             
-            // 新增：解析所有成员信息
+            // 解析所有成员信息（无论Leader还是非Leader都要完整填充）
             this.allMembers.clear();
             for (String memberId : result.getMembers()) {
-                // 简化处理：假设所有成员都订阅相同的topics
-                this.allMembers.add(new MemberInfo(memberId, subscribedTopics));
+                if (memberId != null && !memberId.isEmpty()) {
+                    this.allMembers.add(new MemberInfo(memberId, subscribedTopics));
+                }
+            }
+            // 确保自己一定在allMembers中
+            if (!this.allMembers.stream().anyMatch(member -> member.getMemberId().equals(this.memberId))) {
+                this.allMembers.add(new MemberInfo(this.memberId, subscribedTopics));
+                System.out.printf("[DEBUG] Added self to allMembers: memberId=%s, allMembers=%s\n", this.memberId, this.allMembers);
             }
             
             System.out.printf("[ConsumerCoordinator] joinGroup success: generationId=%d, memberId=%s, isLeader=%s, members=%s\n", 
                 this.generationId, this.memberId, this.isLeader, result.getMembers());
+            System.out.printf("[DEBUG] joinGroup result: protocolName=%s, leaderId=%s, memberId=%s, members=%s, allMembers=%s\n", 
+                result.getProtocolName(), result.getLeaderId(), result.getMemberId(), result.getMembers(), this.allMembers);
+            
+            // 新增：调试信息
+            System.out.printf("[DEBUG] joinGroup completed: clientId=%s, memberId=%s, isLeader=%s, allMembers.size=%d\n", 
+                clientId, this.memberId, this.isLeader, this.allMembers.size());
             
         } catch (Exception e) {
             groupState = GroupState.UNJOINED;
+            System.err.printf("[ERROR] joinGroup failed: clientId=%s, groupId=%s, memberId=%s, topics=%s, error=%s\n", clientId, groupId, memberId, subscribedTopics, e.getMessage());
+            
+            // 如果是超时错误且还有重试次数，则重试
+            if ((e instanceof java.net.SocketTimeoutException || e.getCause() instanceof java.net.SocketTimeoutException) && retryCount < 3) {
+                System.out.printf("[WARN] Socket timeout detected, retrying joinGroup (retryCount=%d)...\n", retryCount);
+                joinGroupWithRetry(retryCount + 1);
+                return;
+            }
+            
             throw new RuntimeException("Failed to join group", e);
         }
     }
     
     private void syncGroup() {
+        syncGroupWithRetry(0);
+    }
+    
+    private void syncGroupWithRetry(int retryCount) {
+        System.out.printf("[DEBUG] syncGroupWithRetry: retryCount=%d, clientId=%s\n", retryCount, clientId);
         try {
             groupState = GroupState.REBALANCING;
-            
             ByteBuffer request;
+            int expectedMemberCount = allMembers.size(); // 默认
             if (isLeader) {
-                // Leader需要计算分区分配
+                // 修正：只要有成员（自己），就可以分配
+                if (allMembers.isEmpty() && retryCount < 10) {
+                    System.out.printf("[Leader] 等待至少有一个成员: allMembers.size=%d, retryCount=%d\n", allMembers.size(), retryCount);
+                    Thread.sleep(1000 * (retryCount + 1));
+                    syncGroupWithRetry(retryCount + 1);
+                    return;
+                }
                 Map<String, List<PartitionAssignment>> assignments = calculatePartitionAssignments();
-                request = SyncGroupRequestBuilder.buildWithAssignments(clientId, groupId, generationId, assignments);
+                request = SyncGroupRequestBuilder.buildWithAssignments(clientId, groupId, generationId, memberId, assignments);
                 System.out.printf("[ConsumerCoordinator] Leader sending assignments: %s\n", assignments);
+                // Leader分配后不再主动rejoinGroup，只需正常syncGroup
+                try {
+                    ByteBuffer heartbeatReq = HeartbeatRequestBuilder.build(clientId, groupId, generationId, memberId);
+                    ByteBuffer heartbeatResp = coordinatorSocket.sendAndReceive(heartbeatReq);
+                    short errorCode = HeartbeatResponseParser.parse(heartbeatResp);
+                    System.out.printf("[Leader] 主动心跳: errorCode=%d\n", errorCode);
+                } catch (Exception e) {
+                    System.err.println("[Leader] 主动心跳异常: " + e);
+                }
             } else {
-                // 非Leader发送空的分配
-                request = SyncGroupRequestBuilder.build(clientId, groupId, generationId, memberId, subscribedTopics);
+                // 非Leader等待Leader分配完成
+                if (allMembers.isEmpty() && retryCount < 10) {
+                    System.out.printf("[Non-leader] 等待Leader分配完成: allMembers.size=%d, retryCount=%d\n", allMembers.size(), retryCount);
+                    Thread.sleep(1000 * (retryCount + 1));
+                    syncGroupWithRetry(retryCount + 1);
+                    return;
+                }
+                System.out.printf("[DEBUG] Non-leader syncGroup: memberId=%s, allMembers=%s, retryCount=%d\n", memberId, allMembers, retryCount);
+                // 非Leader发送空的分配信息，等待Coordinator返回Leader的分配结果
+                request = SyncGroupRequestBuilder.buildEmptyAssignment(clientId, groupId, generationId, memberId);
                 System.out.println("[ConsumerCoordinator] Non-leader sending empty assignment");
             }
-            
             ByteBuffer response = coordinatorSocket.sendAndReceive(request);
             SyncGroupResponseParser.SyncGroupResult result = SyncGroupResponseParser.parse(response);
-            
             if (result.getErrorCode() != 0) {
+                // 特殊处理 REBALANCE_IN_PROGRESS/ILLEGAL_GENERATION 错误
+                if ((result.getErrorCode() == 27 || result.getErrorCode() == 25 || result.getErrorCode() == 22) && retryCount < 10) {
+                    System.out.printf("[WARN] Rebalance in progress/illegal generation during syncGroup, retrying (retryCount=%d)...\n", retryCount);
+                    Thread.sleep(1000 * (retryCount + 1));
+                    syncGroupWithRetry(retryCount + 1);
+                    return;
+                }
                 throw new RuntimeException("Failed to sync group: error=" + result.getErrorCode());
             }
-            
             this.assignments = result.getAssignments();
             System.out.printf("[ConsumerCoordinator] syncGroup success: assignments=%s\n", this.assignments);
-            groupState = GroupState.STABLE;
             
+            // 新增：如果非Leader收到空的分配信息，记录警告但继续执行
+            if (!this.isLeader && this.assignments.isEmpty()) {
+                System.out.printf("[WARN] Non-leader received empty assignments, but continuing with empty assignment\n");
+            }
+            
+            groupState = GroupState.STABLE;
+            synchronized (assignmentLock) {
+                assignmentLock.notifyAll();
+            }
         } catch (Exception e) {
             groupState = GroupState.UNJOINED;
+            System.err.printf("[ERROR] syncGroupWithRetry failed: clientId=%s, groupId=%s, error=%s\n", clientId, groupId, e.getMessage());
+            if ((e instanceof java.net.SocketTimeoutException || e.getCause() instanceof java.net.SocketTimeoutException) && retryCount < 3) {
+                System.out.printf("[WARN] Socket timeout during syncGroup, retrying (retryCount=%d)...\n", retryCount);
+                try {
+                    Thread.sleep(1000 * (retryCount + 1));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during syncGroup retry", ie);
+                }
+                syncGroupWithRetry(retryCount + 1);
+                return;
+            }
             throw new RuntimeException("Failed to sync group", e);
         }
     }
     
     private void startHeartbeat() {
+        System.out.printf("[DEBUG] startHeartbeat: clientId=%s, groupId=%s\n", clientId, groupId);
         if (heartbeatExecutor != null) {
             heartbeatExecutor.shutdown();
         }
@@ -171,9 +275,9 @@ public class ConsumerCoordinator {
                     System.out.println("[ConsumerCoordinator] Skipping heartbeat due to rejoin in progress");
                     return;
                 }
-                
+                System.out.printf("[DEBUG] Heartbeat thread running: clientId=%s, groupId=%s\n", clientId, groupId);
                 ByteBuffer request = HeartbeatRequestBuilder.build(clientId, groupId, generationId, memberId);
-                System.out.printf("[HeartbeatRequestBuilder] 请求字节流: %s\n", bytesToHex(request));
+                // System.out.printf("[HeartbeatRequestBuilder] 请求字节流: %s\n", bytesToHex(request));
                 ByteBuffer response = coordinatorSocket.sendAndReceive(request);
                 short errorCode = HeartbeatResponseParser.parse(response);
                 System.out.printf("[HeartbeatResponse] errorCode=%d\n", errorCode);
@@ -203,22 +307,30 @@ public class ConsumerCoordinator {
     
     // 新增：重新加入组的方法
     private synchronized void rejoinGroup() {
+        System.out.printf("[DEBUG] rejoinGroup called: clientId=%s, groupId=%s, isRejoining=%s\n", clientId, groupId, isRejoining);
         if (isRejoining) {
             System.out.println("[ConsumerCoordinator] Already re-joining, skipping...");
             return;
         }
         try {
             isRejoining = true; // 设置标志
+            System.out.printf("[DEBUG] rejoinGroup: clientId=%s, groupId=%s, memberId=%s, topics=%s\n", clientId, groupId, memberId, subscribedTopics);
             System.out.println("[ConsumerCoordinator] Rejoining group...");
             groupState = GroupState.REBALANCING;
             
             // 关闭旧的socket连接
             if (coordinatorSocket != null) {
-                coordinatorSocket.close();
+                try {
+                    System.out.println("[DEBUG] Closing old coordinatorSocket");
+                    coordinatorSocket.close();
+                } catch (Exception e) {
+                    System.out.println("[DEBUG] coordinatorSocket already closed or error: " + e);
+                }
             }
             
             // 重新建立连接
             this.coordinatorSocket = new KafkaSingleSocketClient(coordinatorHost, coordinatorPort);
+            System.out.printf("[DEBUG] coordinatorSocket status: %s\n", coordinatorSocket == null ? "null" : "open");
             
             // 重新加入组
             joinGroup();
@@ -226,8 +338,11 @@ public class ConsumerCoordinator {
             syncGroup();
             
             System.out.println("[ConsumerCoordinator] Successfully rejoined group");
+            synchronized (assignmentLock) {
+                assignmentLock.notifyAll();
+            }
         } catch (Exception e) {
-            System.err.println("[ConsumerCoordinator] Failed to rejoin group: " + e.getMessage());
+            System.err.printf("[ERROR] rejoinGroup failed: clientId=%s, groupId=%s, memberId=%s, topics=%s, error=%s\n", clientId, groupId, memberId, subscribedTopics, e.getMessage());
             groupState = GroupState.UNJOINED;
         } finally {
             isRejoining = false; // 重置标志
@@ -265,16 +380,53 @@ public class ConsumerCoordinator {
     }
     
     public void close() {
-        if (heartbeatExecutor != null) {
-            heartbeatExecutor.shutdown();
-            try {
-                heartbeatExecutor.awaitTermination(5, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+        try {
+            System.out.printf("[DEBUG] close() called: clientId=%s, groupId=%s, memberId=%s, groupState=%s\n", 
+                clientId, groupId, memberId, groupState);
+            
+            // 先停止心跳
+            if (heartbeatExecutor != null) {
+                heartbeatExecutor.shutdown();
+                try {
+                    heartbeatExecutor.awaitTermination(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
-        }
-        if (coordinatorSocket != null) {
-            coordinatorSocket.close();
+            
+            // 发送LeaveGroup请求，通知服务端离开组
+            System.out.printf("[DEBUG] LeaveGroup conditions check: coordinatorSocket=%s, memberId.isEmpty()=%s, groupState!=UNJOINED=%s\n", 
+                coordinatorSocket != null ? "not null" : "null", 
+                memberId.isEmpty(), 
+                groupState != GroupState.UNJOINED);
+            
+            if (coordinatorSocket != null && !memberId.isEmpty() && groupState != GroupState.UNJOINED) {
+                try {
+                    System.out.printf("[DEBUG] Sending LeaveGroup request: memberId=%s, groupId=%s\n", memberId, groupId);
+                    ByteBuffer request = LeaveGroupRequestBuilder.build(clientId, groupId, memberId);
+                    ByteBuffer response = coordinatorSocket.sendAndReceive(request);
+                    short errorCode = LeaveGroupResponseParser.parse(response);
+                    System.out.printf("[DEBUG] LeaveGroup response: errorCode=%d\n", errorCode);
+                } catch (Exception e) {
+                    System.err.printf("[WARN] Failed to send LeaveGroup request: %s\n", e.getMessage());
+                    e.printStackTrace();
+                }
+            } else {
+                System.out.printf("[DEBUG] Skip LeaveGroup request: coordinatorSocket=%s, memberId=%s, groupState=%s\n", 
+                    coordinatorSocket != null ? "not null" : "null", memberId, groupState);
+            }
+            
+            // 关闭socket连接
+            if (coordinatorSocket != null) {
+                coordinatorSocket.close();
+            }
+            
+            groupState = GroupState.UNJOINED;
+            System.out.printf("[DEBUG] ConsumerCoordinator closed: clientId=%s, groupId=%s, memberId=%s\n", clientId, groupId, memberId);
+            
+        } catch (Exception e) {
+            System.err.printf("[ERROR] Error during close: %s\n", e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -291,32 +443,32 @@ public class ConsumerCoordinator {
     
     // 新增：计算分区分配
     private Map<String, List<PartitionAssignment>> calculatePartitionAssignments() {
-        try {
-            // 获取所有topic的分区信息
-            Map<String, List<Integer>> topicPartitions = getTopicPartitions();
-            // 新增：打印每个topic的分区leaders
-            for (String topic : topicPartitions.keySet()) {
-                if (metadataManager != null) {
-                    metadataManager.refreshMetadata(topic);
-                    Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
-                    System.out.println("[DEBUG] topic=" + topic + " 分区leaders: " + leaders);
-                }
+        Map<String, List<PartitionAssignment>> assignments = new HashMap<>();
+        
+        // 过滤掉空字符串的memberId
+        List<MemberInfo> validMembers = new ArrayList<>();
+        for (MemberInfo member : allMembers) {
+            if (member.getMemberId() != null && !member.getMemberId().isEmpty()) {
+                validMembers.add(member);
             }
-            // 使用分区分配策略进行分配
-            Map<String, List<PartitionAssignment>> assignments = partitionAssignor.assign(allMembers, topicPartitions);
-            
-            System.out.printf("[ConsumerCoordinator] Calculated assignments: %s\n", assignments);
-            return assignments;
-            
-        } catch (Exception e) {
-            System.err.println("[ConsumerCoordinator] Failed to calculate partition assignments: " + e.getMessage());
-            // 返回空分配作为fallback
-            Map<String, List<PartitionAssignment>> fallback = new HashMap<>();
-            for (MemberInfo member : allMembers) {
-                fallback.put(member.getMemberId(), new ArrayList<>());
-            }
-            return fallback;
         }
+        
+        System.out.printf("[DEBUG] calculatePartitionAssignments: allMembers=%s, validMembers=%s\n", allMembers, validMembers);
+        
+        if (validMembers.isEmpty()) {
+            System.out.println("[WARN] No valid members found, skipping partition assignment");
+            return assignments;
+        }
+        
+        // 获取topic分区信息
+        Map<String, List<Integer>> topicPartitions = getTopicPartitions();
+        System.out.printf("[DEBUG] calculatePartitionAssignments: topicPartitions=%s\n", topicPartitions);
+        
+        // 使用分区分配器
+        assignments = partitionAssignor.assign(validMembers, topicPartitions);
+        
+        System.out.printf("[DEBUG] calculatePartitionAssignments: assignments=%s\n", assignments);
+        return assignments;
     }
     
     // 新增：获取topic分区信息
@@ -327,15 +479,17 @@ public class ConsumerCoordinator {
             if (metadataManager != null) {
                 metadataManager.refreshMetadata(topic);
                 Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
+                System.out.println("[DEBUG] topic=" + topic + " 分区leaders: " + leaders);
                 if (leaders != null && !leaders.isEmpty()) {
                     partitions.addAll(leaders.keySet());
                 }
             }
             if (partitions.isEmpty()) {
-                partitions.add(0); // fallback，防止空分区
+                partitions.add(0); // fallback
             }
             topicPartitions.put(topic, partitions);
         }
+        System.out.printf("[DEBUG] getTopicPartitions: topicPartitions=%s\n", topicPartitions);
         return topicPartitions;
     }
     

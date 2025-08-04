@@ -21,73 +21,56 @@ public class SyncGroupRequestBuilder {
         }
         assignments.put(memberId, memberAssignments);
         
-        return buildWithAssignments(clientId, groupId, generationId, assignments);
+        return buildWithAssignments(clientId, groupId, generationId, memberId, assignments);
     }
     
-    public static ByteBuffer buildWithAssignments(String clientId, String groupId, int generationId, 
-                                                 Map<String, List<PartitionAssignment>> assignments) {
+    public static ByteBuffer buildEmptyAssignment(String clientId, String groupId, int generationId, String memberId) {
+        // 非Leader消费者发送空的分配信息
+        Map<String, List<PartitionAssignment>> assignments = new HashMap<>();
+        // 创建一个新的方法调用来正确处理空的assignments
+        return buildWithAssignments(clientId, groupId, generationId, memberId, assignments);
+    }
+    
+    // 新的buildWithAssignments，强制要求传入memberId
+    public static ByteBuffer buildWithAssignments(String clientId, String groupId, int generationId, String memberId, Map<String, List<PartitionAssignment>> assignments) {
         try {
-            // 计算总大小
             int totalSize = 0;
             byte[] clientIdBytes = clientId.getBytes(StandardCharsets.UTF_8);
             byte[] groupIdBytes = groupId.getBytes(StandardCharsets.UTF_8);
-
-            // 基础字段大小
-            totalSize += 4; // size
-            totalSize += 2; // apiKey
-            totalSize += 2; // apiVersion
-            totalSize += 4; // correlationId
-            totalSize += 2 + clientIdBytes.length; // clientId
-            totalSize += 2 + groupIdBytes.length; // groupId
-            totalSize += 4; // generationId
-
-            // 写入memberId字段（主结构体）
-            String mainMemberIdStr = clientId;
-            if (!assignments.isEmpty()) {
-                mainMemberIdStr = assignments.keySet().iterator().next();
-            }
-            byte[] mainMemberIdBytes = mainMemberIdStr.getBytes(StandardCharsets.UTF_8);
-            totalSize += 2 + mainMemberIdBytes.length; // 这里是遗漏的关键！
-
-            // 计算groupAssignment数组大小
-            totalSize += 4; // groupAssignment array length
+            // 基础字段
+            totalSize += 4 + 2 + 2 + 4;
+            totalSize += 2 + clientIdBytes.length;
+            totalSize += 2 + groupIdBytes.length;
+            totalSize += 4;
+            // 主memberId字段
+            byte[] mainMemberIdBytes = memberId.getBytes(StandardCharsets.UTF_8);
+            totalSize += 2 + mainMemberIdBytes.length;
+            // groupAssignment数组
+            totalSize += 4;
             Map<String, byte[]> assignmentBytesMap = new HashMap<>();
             for (Map.Entry<String, List<PartitionAssignment>> entry : assignments.entrySet()) {
                 String assignMemberId = entry.getKey();
                 List<PartitionAssignment> memberAssignments = entry.getValue();
                 byte[] assignMemberIdBytes = assignMemberId.getBytes(StandardCharsets.UTF_8);
-                totalSize += 2 + assignMemberIdBytes.length; // member id
-                // 严格序列化assignment内容
+                totalSize += 2 + assignMemberIdBytes.length;
                 byte[] assignmentBytes = encodeMemberAssignment(memberAssignments);
                 assignmentBytesMap.put(assignMemberId, assignmentBytes);
-                totalSize += 4; // assignment size
-                totalSize += assignmentBytes.length; // assignment bytes
-                System.out.printf("[SyncGroupRequestBuilder] assignMemberId=%s, assignmentBytes.length=%d\n", assignMemberId, assignmentBytes.length);
+                totalSize += 4;
+                totalSize += assignmentBytes.length;
             }
-            System.out.printf("[SyncGroupRequestBuilder] totalSize=%d, assignments.size=%d\n", totalSize, assignments.size());
-
-            // 分配buffer
             ByteBuffer buffer = ByteBuffer.allocate(totalSize);
-            System.out.printf("[SyncGroupRequestBuilder] buffer.capacity=%d\n", buffer.capacity());
-
-            // 写入请求头
-            buffer.putInt(totalSize - 4); // size
-            buffer.putShort((short) 14); // apiKey = 14 (SyncGroup)
-            buffer.putShort((short) 0); // apiVersion = 0
-            buffer.putInt(2); // correlationId
-
-            // 写入基础字段
+            buffer.putInt(totalSize - 4);
+            buffer.putShort((short) 14);
+            buffer.putShort((short) 0);
+            buffer.putInt(2);
             buffer.putShort((short) clientIdBytes.length);
             buffer.put(clientIdBytes);
             buffer.putShort((short) groupIdBytes.length);
             buffer.put(groupIdBytes);
             buffer.putInt(generationId);
-            // 写入memberId字段（必须！）
             buffer.putShort((short) mainMemberIdBytes.length);
             buffer.put(mainMemberIdBytes);
-            System.out.printf("[SyncGroupRequestBuilder] after main memberId, position=%d, remaining=%d\n", buffer.position(), buffer.remaining());
-            // 写入groupAssignment数组
-            buffer.putInt(assignments.size()); // groupAssignment array length
+            buffer.putInt(assignments.size());
             for (Map.Entry<String, List<PartitionAssignment>> entry : assignments.entrySet()) {
                 String assignMemberId = entry.getKey();
                 byte[] assignMemberIdBytes = assignMemberId.getBytes(StandardCharsets.UTF_8);
@@ -95,23 +78,11 @@ public class SyncGroupRequestBuilder {
                 buffer.put(assignMemberIdBytes);
                 byte[] assignmentBytes = assignmentBytesMap.get(assignMemberId);
                 buffer.putInt(assignmentBytes.length);
-                System.out.printf("[SyncGroupRequestBuilder] before assignmentBytes, position=%d, remaining=%d, assignmentBytes.length=%d\n", buffer.position(), buffer.remaining(), assignmentBytes.length);
                 buffer.put(assignmentBytes);
-                System.out.printf("[SyncGroupRequestBuilder] after assignmentBytes, position=%d, remaining=%d\n", buffer.position(), buffer.remaining());
             }
-
             buffer.flip();
-            // 打印请求字节流
-            byte[] bytes = new byte[buffer.remaining()];
-            buffer.mark();
-            buffer.get(bytes);
-            buffer.reset();
-            System.out.print("[SyncGroupRequestBuilder] 请求字节流: ");
-            for (byte b : bytes) System.out.printf("%02x ", b);
-            System.out.println();
             return buffer;
         } catch (Exception e) {
-            e.printStackTrace();
             throw new RuntimeException("Failed to build SyncGroup request", e);
         }
     }

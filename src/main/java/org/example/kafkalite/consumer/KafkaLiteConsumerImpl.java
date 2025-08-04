@@ -75,7 +75,6 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         if (closed.get()) {
             throw new IllegalStateException("Consumer is closed");
         }
-
         long startTime = System.currentTimeMillis();
         List<ConsumerRecord> allRecords = new ArrayList<>();
         System.out.println("[Poll] 开始拉取消息...");
@@ -83,8 +82,16 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         System.out.println("[Poll] 当前分区分配: " + assignments);
         try {
             if (assignments == null || assignments.isEmpty()) {
-                System.out.println("[Poll] 当前无分区分配，返回空结果");
-                return allRecords;
+                System.out.println("[Poll] 当前无分区分配，等待分配变更...");
+                synchronized (coordinator.assignmentLock) {
+                    coordinator.assignmentLock.wait(timeoutMs > 0 ? timeoutMs : 2000);
+                }
+                // 再次获取分配
+                assignments = coordinator.getAssignments();
+                if (assignments == null || assignments.isEmpty()) {
+                    System.out.println("[Poll] 等待后仍无分区分配，返回空结果");
+                    return allRecords;
+                }
             }
             for (PartitionAssignment assignment : assignments) {
                 if (allRecords.size() >= config.getMaxPollRecords()) {
@@ -203,17 +210,13 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
 
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
+        // 先提交offset，再设置closed=true，最后关闭coordinator
+        if (!closed.get()) {
             try {
-                // 移除 scheduler 相关自动提交线程关闭逻辑
-                // 在 close 方法中无需 shutdown scheduler
-
-                // 最后一次提交offset
                 if (config.isEnableAutoCommit()) {
                     commitSync();
                 }
-                
-                // 关闭协调者
+                closed.set(true);
                 coordinator.close();
                 offsetManager.close();
             } finally {

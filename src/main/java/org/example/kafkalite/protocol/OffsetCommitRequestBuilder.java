@@ -45,13 +45,13 @@ public class OffsetCommitRequestBuilder {
         buffer.flip();
 
         // 打印请求字节流
-        byte[] reqBytes = new byte[buffer.remaining()];
-        buffer.mark();
-        buffer.get(reqBytes);
-        buffer.reset();
-        System.out.print("[OffsetCommitRequestBuilder] 请求字节流: ");
-        for (byte b : reqBytes) System.out.printf("%02x ", b);
-        System.out.println();
+        // byte[] reqBytes = new byte[buffer.remaining()];
+        // buffer.mark();
+        // buffer.get(reqBytes);
+        // buffer.reset();
+        // System.out.print("[OffsetCommitRequestBuilder] 请求字节流: ");
+        // for (byte b : reqBytes) System.out.printf("%02x ", b);
+        // System.out.println();
 
         return buffer;
     }
@@ -102,13 +102,13 @@ public class OffsetCommitRequestBuilder {
         buffer.flip();
 
         // 打印请求字节流
-        byte[] reqBytes = new byte[buffer.remaining()];
-        buffer.mark();
-        buffer.get(reqBytes);
-        buffer.reset();
-        System.out.print("[OffsetCommitRequestBuilder] 请求字节流: ");
-        for (byte b : reqBytes) System.out.printf("%02x ", b);
-        System.out.println();
+        // byte[] reqBytes = new byte[buffer.remaining()];
+        // buffer.mark();
+        // buffer.get(reqBytes);
+        // buffer.reset();
+        // System.out.print("[OffsetCommitRequestBuilder] 请求字节流: ");
+        // for (byte b : reqBytes) System.out.printf("%02x ", b);
+        // System.out.println();
 
         return buffer;
     }

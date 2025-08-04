@@ -33,22 +33,31 @@ public class SyncGroupResponseParser {
     
     public static SyncGroupResult parse(ByteBuffer buffer) {
         try {
-            // 注释掉所有System.out.println和System.err.println日志，只保留异常抛出。
+            // 打印完整的响应字节流用于调试
+            byte[] allBytes = new byte[buffer.remaining()];
+            int originalPosition = buffer.position();
+            buffer.get(allBytes);
+            buffer.position(originalPosition);
+            System.out.printf("[SyncGroupResponseParser] 响应字节流: %s\n", bytesToHex(allBytes));
             
             // 跳过总长度
             int totalSize = buffer.getInt();
+            System.out.printf("[SyncGroupResponseParser] totalSize=%d\n", totalSize);
             
             // 读取correlationId
             int correlationId = buffer.getInt();
+            System.out.printf("[SyncGroupResponseParser] correlationId=%d\n", correlationId);
             
             // 读取errorCode
             short errorCode = buffer.getShort();
+            System.out.printf("[SyncGroupResponseParser] errorCode=%d\n", errorCode);
             
             // 读取member assignment
             List<PartitionAssignment> assignments = new ArrayList<>();
             if (buffer.hasRemaining()) {
                 // 读取assignment bytes
                 int assignmentSize = buffer.getInt();
+                System.out.printf("[SyncGroupResponseParser] assignmentSize=%d, buffer.remaining()=%d\n", assignmentSize, buffer.remaining());
                 if (assignmentSize > 0) {
                     byte[] assignmentBytes = new byte[assignmentSize];
                     buffer.get(assignmentBytes);
