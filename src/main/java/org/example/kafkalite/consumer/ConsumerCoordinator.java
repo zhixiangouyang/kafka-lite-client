@@ -57,6 +57,17 @@ public class ConsumerCoordinator {
     public void initializeGroup(List<String> topics) {
         this.subscribedTopics.clear();
         this.subscribedTopics.addAll(topics);
+        
+        // 添加JVM关闭钩子，确保在进程被强制终止时也能正确清理
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("[ShutdownHook] JVM shutting down, cleaning up consumer group...");
+            try {
+                close();
+            } catch (Exception e) {
+                System.err.println("[ShutdownHook] Error during cleanup: " + e.getMessage());
+            }
+        }));
+        
         try {
             groupState = GroupState.REBALANCING;
             System.out.printf("[DEBUG] initializeGroup: clientId=%s, groupId=%s, memberId=%s, topics=%s\n", clientId, groupId, memberId, topics);
@@ -160,6 +171,19 @@ public class ConsumerCoordinator {
             // 新增：调试信息
             System.out.printf("[DEBUG] joinGroup completed: clientId=%s, memberId=%s, isLeader=%s, allMembers.size=%d\n", 
                 clientId, this.memberId, this.isLeader, this.allMembers.size());
+            
+            // 新增：检测ghost consumer问题
+            if (this.isLeader && result.getMembers().size() == 1 && result.getMembers().get(0).equals(this.memberId)) {
+                System.out.printf("[WARN] Potential ghost consumer detected: Leader only sees itself in group\n");
+                // 如果是Leader且只看到自己，可能存在ghost consumer
+                if (retryCount < 1) {
+                    System.out.printf("[INFO] Attempting to trigger rebalance to clean up ghost consumers (retryCount=%d)...\n", retryCount);
+                    // 等待一段时间让服务端清理ghost consumer
+                    Thread.sleep(5000);
+                    joinGroupWithRetry(retryCount + 1);
+                    return;
+                }
+            }
             
         } catch (Exception e) {
             groupState = GroupState.UNJOINED;

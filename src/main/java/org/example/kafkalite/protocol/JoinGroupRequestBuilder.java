@@ -53,7 +53,7 @@ public class JoinGroupRequestBuilder {
             buffer.putShort((short) groupIdBytes.length);
             buffer.put(groupIdBytes);
             // sessionTimeout
-            buffer.putInt(30000); // 30s
+            buffer.putInt(10000); // 10s (改为更短的值，让ghost消费者更快被清理)
             // memberId
             buffer.putShort((short) memberIdBytes.length);
             buffer.put(memberIdBytes);
