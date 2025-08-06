@@ -333,17 +333,15 @@ public class ConsumerCoordinator {
                 
                 if (errorCode == 0) {
                     System.out.printf("[ConsumerCoordinator] Heartbeat success for clientId=%s, groupId=%s\n", clientId, groupId);
-                    
                     // 新增：定期检测组成员变化
-                    heartbeatCounter++;
-                    if (heartbeatCounter >= MEMBERSHIP_CHECK_INTERVAL) {
-                        System.out.printf("[DEBUG] Performing periodic membership check for clientId=%s (heartbeatCounter=%d)\n", clientId, heartbeatCounter);
-                        checkGroupMembership();
-                        heartbeatCounter = 0; // 重置计数器
-                    }
-                    
-                } else if (errorCode == 25) { // REBALANCE_IN_PROGRESS
-                    System.out.printf("[ConsumerCoordinator] Rebalance in progress detected! clientId=%s, groupId=%s, will rejoin group\n", clientId, groupId);
+                    // heartbeatCounter++;
+                    // if (heartbeatCounter >= MEMBERSHIP_CHECK_INTERVAL) {
+                    //     System.out.printf("[DEBUG] Performing periodic membership check for clientId=%s (heartbeatCounter=%d)\n", clientId, heartbeatCounter);
+                    //     checkGroupMembership();
+                    //     heartbeatCounter = 0; // 重置计数器
+                    // }
+                } else if (errorCode == 25 || errorCode == 27) { // REBALANCE_IN_PROGRESS
+                    System.out.printf("[ConsumerCoordinator] Rebalance in progress detected (errorCode=%d)! clientId=%s, groupId=%s, will rejoin group\n", errorCode, clientId, groupId);
                     // 重新加入组
                     rejoinGroup();
                 } else if (errorCode == 22) { // ILLEGAL_GENERATION
