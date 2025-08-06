@@ -30,6 +30,7 @@ public class KafkaConsumerTest {
 
         // 1. 配置 broker 地址
         String broker = "10.251.183.199:27462";
+//        String broker = "localhost:9092";
 
         // 2. 创建消费者配置
         ConsumerConfig config = new ConsumerConfig();
@@ -38,11 +39,11 @@ public class KafkaConsumerTest {
         config.setFetchMaxBytes(1024 * 1024);       // 单次最多拉取1MB数据
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
-        config.setHeartbeatIntervalMs(500);        // 心跳间隔3秒
+        config.setHeartbeatIntervalMs(1000);        // 心跳间隔1秒
 
         // 3. 创建消费者实例
         consumer = new KafkaLiteConsumerImpl(
-            "test-group-5-2",                    // 消费者组ID
+            "test-group-5-4",                    // 消费者组ID
             Arrays.asList(broker),           // Kafka集群地址
             config                           // 配置
         );

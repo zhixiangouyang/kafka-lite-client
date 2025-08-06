@@ -434,6 +434,10 @@ public class ConsumerCoordinator {
         return memberId;
     }
     
+    public String getClientId() {
+        return clientId;
+    }
+    
     public boolean isStable() {
         return groupState == GroupState.STABLE;
     }

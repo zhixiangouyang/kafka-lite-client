@@ -36,7 +36,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.groupId = groupId;
         this.bootstrapServers = bootstrapServers;
         this.config = config;
-        this.clientId = "kafka-lite-" + UUID.randomUUID().toString().substring(0, 8);
+        // 修复：使用基于groupId的固定clientId，确保offset持久化
+        this.clientId = "kafka-lite-" + groupId.replaceAll("[^a-zA-Z0-9-]", "-");
         
         // 使用配置的连接池大小创建MetadataManager
         this.metadataManager = new MetadataManagerImpl(bootstrapServers, config.getMetadataConnectionPoolSize());
@@ -44,8 +45,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.metricsCollector = new MetricsCollector();
         this.coordinator = new ConsumerCoordinator(clientId, groupId, config, bootstrapServers);
         this.offsetManager.setCoordinator(this.coordinator);
-        // 新增：注入coordinatorSocket
-        this.offsetManager.setCoordinatorSocket(this.coordinator.coordinatorSocket);
+        // coordinatorSocket在coordinator.initializeGroup()后才会被创建
     }
 
     @Override

@@ -7,7 +7,7 @@ import java.util.Map;
 
 public class OffsetFetchResponseParser {
     /**
-     * 解析 OffsetFetchResponse v0，返回 topic->partition->offset
+     * 解析 OffsetFetchResponse v2，返回 topic->partition->offset
      */
     public static Map<String, Map<Integer, Long>> parse(ByteBuffer buffer) {
         Map<String, Map<Integer, Long>> result = new HashMap<>();
@@ -23,7 +23,18 @@ public class OffsetFetchResponseParser {
                 long offset = buffer.getLong();
                 String metadata = readString(buffer);
                 short errorCode = buffer.getShort();
-                partMap.put(partition, offset);
+                
+                System.out.printf("[OffsetFetchResponse] topic=%s, partition=%d, offset=%d, errorCode=%d\n", 
+                    topic, partition, offset, errorCode);
+                
+                // 只有在没有错误时才使用offset
+                if (errorCode == 0) {
+                    partMap.put(partition, offset);
+                } else {
+                    System.out.printf("[OffsetFetchResponse] 错误: topic=%s, partition=%d, errorCode=%d\n", 
+                        topic, partition, errorCode);
+                    partMap.put(partition, -1L); // 表示没有有效的committed offset
+                }
             }
             result.put(topic, partMap);
         }

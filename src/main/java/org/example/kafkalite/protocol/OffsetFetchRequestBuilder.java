@@ -10,9 +10,9 @@ public class OffsetFetchRequestBuilder {
         ByteBuffer buffer = ByteBuffer.allocate(estimatedSize);
         buffer.position(4); // 预留4字节长度
 
-        // 请求头
+        // 请求头 - 修改为v2版本
         short apiKey = 9;
-        short apiVersion = 0;
+        short apiVersion = 2;
         buffer.putShort(apiKey);
         buffer.putShort(apiVersion);
         buffer.putInt(correlationId);

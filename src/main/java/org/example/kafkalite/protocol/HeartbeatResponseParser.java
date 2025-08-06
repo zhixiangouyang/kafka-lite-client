@@ -16,7 +16,7 @@ public class HeartbeatResponseParser {
             
             // 读取correlationId（4字节）
             int correlationId = buffer.getInt();
-            
+        
             // 读取errorCode（2字节 INT16）
             short errorCode = buffer.getShort();
             

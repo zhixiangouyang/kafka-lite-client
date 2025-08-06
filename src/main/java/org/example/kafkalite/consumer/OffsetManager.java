@@ -34,21 +34,41 @@ public class OffsetManager {
         this.coordinatorSocket = socket;
     }
 
-    // 获取当前offset
+    // 获取当前offset - 修复重复消费问题
     public synchronized long getOffset(String topic, int partition) {
-        long offset = offsets.getOrDefault(topic, Collections.emptyMap()).getOrDefault(partition, 0L);
+        Long offset = offsets.getOrDefault(topic, Collections.emptyMap()).get(partition);
         
-        // 如果offset是-1，返回latest offset作为fallback
-        if (offset == -1) {
-            System.out.printf("[OffsetManager] offset=-1 for topic=%s, partition=%d, 使用latest offset\n", topic, partition);
-            // 硬编码latest offset，后续可以改为动态获取
-            if ("ouyangTest".equals(topic) && partition == 0) {
-                return 0L; // 线上topic的latest offset
-            }
-            return 0L; // 其他topic的fallback
+        // 1. 如果有有效的已提交offset，直接使用
+        if (offset != null && offset >= 0) {
+            System.out.printf("[OffsetManager] 使用已提交offset: topic=%s, partition=%d, offset=%d\n", 
+                topic, partition, offset);
+            return offset;
         }
         
-        return offset;
+        // 2. 如果offset为null或-1，表示该消费者组在此分区没有committed offset
+        // 根据策略决定从哪里开始消费
+        if (offset == null || offset == -1) {
+            System.out.printf("[OffsetManager] 分区无已提交offset: topic=%s, partition=%d, offset=%s\n", 
+                topic, partition, offset);
+            
+            // 这里可以配置策略：
+            // - 如果想从最新开始（跳过历史消息）：可以调用ListOffsets获取latest
+            // - 如果想从最早开始（消费所有历史消息）：返回0或调用ListOffsets获取earliest
+            // - 当前简单策略：从0开始消费（适合大多数情况）
+            
+            long startOffset = 0L; // 简单策略：从头开始
+            System.out.printf("[OffsetManager] 使用起始offset: topic=%s, partition=%d, offset=%d\n", 
+                topic, partition, startOffset);
+            
+            // 更新到本地缓存
+            updateOffset(topic, partition, startOffset);
+            return startOffset;
+        }
+        
+        // 3. 其他情况（不应该发生）
+        System.out.printf("[OffsetManager] 未预期的offset值: topic=%s, partition=%d, offset=%d, 使用0\n", 
+            topic, partition, offset);
+        return 0L;
     }
 
     // 更新 offset
@@ -86,8 +106,11 @@ public class OffsetManager {
             System.out.printf("[DEBUG] commitSync: generationId=%d, memberId=%s, offsets=%s\n", generationId, memberId, offsets);
             System.out.println("[DEBUG] offsets to commit: " + offsets);
             // 1. 构造 OffsetCommitRequest v2
+            // 修复：使用正确的clientId而不是硬编码的"kafka-ite"
+            String realClientId = coordinator != null ? coordinator.getClientId() : "kafka-lite";
+            
             ByteBuffer request = OffsetCommitRequestBuilder.build(
-                    groupId, offsets, 1, "kafka-ite", generationId, memberId, 86400000L  // 使用24小时作为保留时间
+                    groupId, offsets, 1, realClientId, generationId, memberId, 86400000L  // 使用24小时作为保留时间
             );
             // 2. 发送并接收响应
             // 获取最新的coordinatorSocket引用
@@ -156,8 +179,10 @@ public class OffsetManager {
                 topicParts.put(topic, parts.toArray(new Integer[0]));
             }
             
+            // 修复：使用正确的clientId进行offset查询
+            String realClientId = coordinator != null ? coordinator.getClientId() : "kafka-lite";
             java.nio.ByteBuffer request = org.example.kafkalite.protocol.OffsetFetchRequestBuilder.build(
-                    groupId, topicParts, 1, "kafka-lite"
+                    groupId, topicParts, 1, realClientId
             );
             
             java.util.Map<String, java.util.Map<Integer, Long>> committed;
@@ -222,8 +247,10 @@ public class OffsetManager {
                     topicParts.put(topic, parts.toArray(new Integer[0]));
                 }
             }
+            // 修复：使用正确的clientId进行offset查询
+            String realClientId = coordinator != null ? coordinator.getClientId() : "kafka-lite";
             ByteBuffer request = OffsetFetchRequestBuilder.build(
-                    groupId, topicParts, 1, "kafka-lite"
+                    groupId, topicParts, 1, realClientId
             );
             
             // 使用coordinator而不是bootstrap server
@@ -236,7 +263,17 @@ public class OffsetManager {
                 for (java.util.Map.Entry<String, java.util.Map<Integer, Long>> entry : committed.entrySet()) {
                     String topic = entry.getKey();
                     for (java.util.Map.Entry<Integer, Long> part : entry.getValue().entrySet()) {
-                        updateOffset(topic, part.getKey(), part.getValue());
+                        long fetchedOffset = part.getValue();
+                        if (fetchedOffset >= 0) {
+                            // 只有当offset>=0时才更新，offset=-1表示没有committed offset
+                            updateOffset(topic, part.getKey(), fetchedOffset);
+                            System.out.printf("[OffsetManager] 找到已提交offset: topic=%s, partition=%d, offset=%d\n", 
+                                topic, part.getKey(), fetchedOffset);
+                        } else {
+                            System.out.printf("[OffsetManager] 分区无已提交offset: topic=%s, partition=%d, offset=%d\n", 
+                                topic, part.getKey(), fetchedOffset);
+                            // 不更新本地缓存，保持null状态，让getOffset方法处理
+                        }
                     }
                 }
             } else {
@@ -252,7 +289,17 @@ public class OffsetManager {
             for (java.util.Map.Entry<String, java.util.Map<Integer, Long>> entry : committed.entrySet()) {
                 String topic = entry.getKey();
                 for (java.util.Map.Entry<Integer, Long> part : entry.getValue().entrySet()) {
-                    updateOffset(topic, part.getKey(), part.getValue());
+                    long fetchedOffset = part.getValue();
+                    if (fetchedOffset >= 0) {
+                        // 只有当offset>=0时才更新，offset=-1表示没有committed offset
+                        updateOffset(topic, part.getKey(), fetchedOffset);
+                        System.out.printf("[OffsetManager] 找到已提交offset: topic=%s, partition=%d, offset=%d\n", 
+                            topic, part.getKey(), fetchedOffset);
+                    } else {
+                        System.out.printf("[OffsetManager] 分区无已提交offset: topic=%s, partition=%d, offset=%d\n", 
+                            topic, part.getKey(), fetchedOffset);
+                        // 不更新本地缓存，保持null状态，让getOffset方法处理
+                    }
                     }
                 }
             }
