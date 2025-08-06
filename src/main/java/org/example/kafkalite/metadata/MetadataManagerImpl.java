@@ -96,11 +96,28 @@ public class MetadataManagerImpl implements MetadataManager {
             topics.add(topic);
             ByteBuffer request = MetadataRequestEncoder.encodeMetadataRequest(topics, 1);
 
-            // 2. 选一个broker发请求
-            String brokerAddress = bootstrapServers.get(0);
+            // 2. 选一个可用的broker发请求（添加故障转移逻辑）
+            ByteBuffer response = null;
+            Exception lastException = null;
             
-            // 3. 使用连接池或短连接发送请求
-            ByteBuffer response = sendRequestWithConnectionPool(brokerAddress, request);
+            // 尝试所有broker，直到找到可用的
+            for (String brokerAddress : bootstrapServers) {
+                try {
+                    System.out.printf("[MetadataManagerImpl] 尝试连接broker: %s\n", brokerAddress);
+                    response = sendRequestWithConnectionPool(brokerAddress, request);
+                    System.out.printf("[MetadataManagerImpl] 成功连接broker: %s\n", brokerAddress);
+                    break; // 成功就退出循环
+                } catch (Exception e) {
+                    System.err.printf("[MetadataManagerImpl] Broker %s 不可用: %s\n", brokerAddress, e.getMessage());
+                    lastException = e;
+                    // 继续尝试下一个broker
+                }
+            }
+            
+            // 如果所有broker都失败了，抛出最后一个异常
+            if (response == null) {
+                throw new RuntimeException("所有broker都不可用", lastException);
+            }
 
             // 4. 解析响应
             Metadata metadata = MetadataResponseParser.parse(response);

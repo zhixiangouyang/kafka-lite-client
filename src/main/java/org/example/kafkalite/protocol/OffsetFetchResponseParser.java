@@ -29,7 +29,7 @@ public class OffsetFetchResponseParser {
                 
                 // 只有在没有错误时才使用offset
                 if (errorCode == 0) {
-                    partMap.put(partition, offset);
+                partMap.put(partition, offset);
                 } else {
                     System.out.printf("[OffsetFetchResponse] 错误: topic=%s, partition=%d, errorCode=%d\n", 
                         topic, partition, errorCode);
