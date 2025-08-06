@@ -50,7 +50,7 @@ public class KafkaConsumerTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("ouyangTest3"));
+            consumer.subscribe(Arrays.asList("ouyangTest6"));
 
             System.out.println("开始消费消息...");
             System.out.println("按 Ctrl+C 停止消费");

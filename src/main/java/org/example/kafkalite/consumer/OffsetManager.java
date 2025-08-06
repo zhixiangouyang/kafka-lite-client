@@ -51,12 +51,20 @@ public class OffsetManager {
             System.out.printf("[OffsetManager] 分区无已提交offset: topic=%s, partition=%d, offset=%s\n", 
                 topic, partition, offset);
             
-            // 这里可以配置策略：
-            // - 如果想从最新开始（跳过历史消息）：可以调用ListOffsets获取latest
-            // - 如果想从最早开始（消费所有历史消息）：返回0或调用ListOffsets获取earliest
-            // - 当前简单策略：从0开始消费（适合大多数情况）
+            // 策略：从latest offset开始消费新消息（而不是历史消息）
+            // 这样可以避免尝试消费已经被清理的消息，直接消费最新的消息
             
-            long startOffset = 0L; // 简单策略：从头开始
+            long startOffset;
+            try {
+                // 获取分区的earliest可用offset，从最早可用消息开始消费
+                startOffset = getEarliestOffset(topic, partition);
+                System.out.printf("[OffsetManager] 获取到earliest offset: topic=%s, partition=%d, offset=%d\n", 
+                    topic, partition, startOffset);
+            } catch (Exception e) {
+                System.err.printf("[OffsetManager] 获取earliest offset失败，使用降级策略: topic=%s, partition=%d, 错误=%s\n", 
+                    topic, partition, e.getMessage());
+                startOffset = 0L; // 降级策略：使用0
+            }
             System.out.printf("[OffsetManager] 使用起始offset: topic=%s, partition=%d, offset=%d\n", 
                 topic, partition, startOffset);
             
@@ -308,6 +316,69 @@ public class OffsetManager {
             System.err.println("[OffsetManager] fetchCommittedOffsets 失败: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    // 获取分区的earliest可用offset（动态获取）
+    private long getEarliestOffset(String topic, int partition) {
+        try {
+            // 使用ListOffsets请求获取earliest offset
+            Map<String, Integer[]> topicPartitions = new HashMap<>();
+            topicPartitions.put(topic, new Integer[]{partition});
+            
+            // 发送ListOffsets请求获取earliest offset
+            ByteBuffer request = org.example.kafkalite.protocol.ListOffsetsRequestBuilder.build(
+                coordinator.getClientId(),
+                topicPartitions,
+                org.example.kafkalite.protocol.ListOffsetsRequestBuilder.EARLIEST_TIMESTAMP,
+                1 // correlationId
+            );
+            
+            // 使用coordinator的socket发送请求
+            String coordinatorAddress = getCoordinatorAddress();
+            ByteBuffer response = sendListOffsetsRequest(coordinatorAddress, request);
+            
+            // 解析响应
+            Map<String, Map<Integer, org.example.kafkalite.protocol.ListOffsetsResponseParser.OffsetInfo>> result = 
+                org.example.kafkalite.protocol.ListOffsetsResponseParser.parse(response);
+            
+            if (result.containsKey(topic) && result.get(topic).containsKey(partition)) {
+                org.example.kafkalite.protocol.ListOffsetsResponseParser.OffsetInfo offsetInfo = 
+                    result.get(topic).get(partition);
+                
+                if (offsetInfo.getErrorCode() == 0) {
+                    long earliestOffset = offsetInfo.getOffset();
+                    System.out.printf("[OffsetManager] 动态获取earliest offset: topic=%s, partition=%d, offset=%d\n", 
+                        topic, partition, earliestOffset);
+                    return earliestOffset;
+                } else {
+                    System.err.printf("[OffsetManager] ListOffsets返回错误: topic=%s, partition=%d, errorCode=%d\n", 
+                        topic, partition, offsetInfo.getErrorCode());
+                }
+            }
+        } catch (Exception e) {
+            System.err.printf("[OffsetManager] 动态获取earliest offset失败: topic=%s, partition=%d, 错误=%s\n", 
+                topic, partition, e.getMessage());
+        }
+        
+        // 降级策略：返回0
+        System.out.printf("[OffsetManager] 使用降级策略offset=0: topic=%s, partition=%d\n", topic, partition);
+        return 0L;
+    }
+    
+    // 获取coordinator地址的辅助方法
+    private String getCoordinatorAddress() {
+        // 这里需要从coordinator获取地址，暂时返回一个默认值
+        // 在实际实现中，应该从coordinator获取实际的broker地址
+        return "10.251.183.199:27462"; // 使用你的broker地址
+    }
+    
+    // 发送ListOffsets请求的辅助方法
+    private ByteBuffer sendListOffsetsRequest(String brokerAddress, ByteBuffer request) {
+        String[] parts = brokerAddress.split(":");
+        String host = parts[0];
+        int port = Integer.parseInt(parts[1]);
+        
+        return org.example.kafkalite.core.KafkaSocketClient.sendAndReceive(host, port, request);
     }
 
     // 关闭socket
