@@ -19,6 +19,9 @@ public class MetadataManagerImpl implements MetadataManager {
 
     // 缓存：nodeId -> brokerInfo
     private final Map<Integer, BrokerInfo> brokerMap = new HashMap<>();
+    
+    // 用于跟踪broker切换
+    private volatile String lastUsedBroker = null;
 
     public MetadataManagerImpl(List<String> bootstrapServers) {
         this(bootstrapServers, 10); // 默认连接池大小10
@@ -101,17 +104,27 @@ public class MetadataManagerImpl implements MetadataManager {
             Exception lastException = null;
             
             // 尝试所有broker，直到找到可用的
+            String lastSuccessfulBroker = null;
             for (String brokerAddress : bootstrapServers) {
                 try {
-                    System.out.printf("[MetadataManagerImpl] 尝试连接broker: %s\n", brokerAddress);
+                    System.out.printf("🔍 [MetadataManagerImpl] 尝试连接broker: %s (topic=%s)\n", brokerAddress, topic);
                     response = sendRequestWithConnectionPool(brokerAddress, request);
-                    System.out.printf("[MetadataManagerImpl] 成功连接broker: %s\n", brokerAddress);
+                    System.out.printf("✅ [BROKER切换] 成功连接到broker: %s (topic=%s)\n", brokerAddress, topic);
+                    lastSuccessfulBroker = brokerAddress;
                     break; // 成功就退出循环
                 } catch (Exception e) {
-                    System.err.printf("[MetadataManagerImpl] Broker %s 不可用: %s\n", brokerAddress, e.getMessage());
+                    System.err.printf("❌ [MetadataManagerImpl] Broker %s 不可用: %s\n", brokerAddress, e.getMessage());
                     lastException = e;
                     // 继续尝试下一个broker
                 }
+            }
+            
+            // 如果切换到了不同的broker，输出切换日志
+            if (lastSuccessfulBroker != null && !lastSuccessfulBroker.equals(getLastUsedBroker())) {
+                System.out.printf("🔄 [BROKER切换] 元数据服务切换: %s -> %s\n", 
+                    getLastUsedBroker() != null ? getLastUsedBroker() : "初始连接", 
+                    lastSuccessfulBroker);
+                setLastUsedBroker(lastSuccessfulBroker);
             }
             
             // 如果所有broker都失败了，抛出最后一个异常
@@ -158,5 +171,14 @@ public class MetadataManagerImpl implements MetadataManager {
             }
         }
         connectionPools.clear();
+    }
+    
+    // 用于跟踪broker切换的辅助方法
+    private String getLastUsedBroker() {
+        return lastUsedBroker;
+    }
+    
+    private void setLastUsedBroker(String broker) {
+        this.lastUsedBroker = broker;
     }
 }
