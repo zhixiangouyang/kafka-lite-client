@@ -20,8 +20,8 @@ public class HeartbeatResponseParser {
             // 读取errorCode（2字节 INT16）
             short errorCode = buffer.getShort();
             
-            System.out.printf("[HeartbeatResponseParser] totalSize=%d, correlationId=%d, errorCode=%d\n", 
-                totalSize, correlationId, errorCode);
+//            System.out.printf("[HeartbeatResponseParser] totalSize=%d, correlationId=%d, errorCode=%d\n",
+//                totalSize, correlationId, errorCode);
                 
             return errorCode;
             

@@ -45,9 +45,9 @@ public class OffsetFetchRequestBuilder {
         buffer.mark();
         buffer.get(reqBytes);
         buffer.reset();
-        System.out.print("[OffsetFetchRequestBuilder] 请求字节流: ");
-        for (byte b : reqBytes) System.out.printf("%02x ", b);
-        System.out.println();
+//        System.out.print("[OffsetFetchRequestBuilder] 请求字节流: ");
+//        for (byte b : reqBytes) System.out.printf("%02x ", b);
+//        System.out.println();
 
         return buffer;
     }

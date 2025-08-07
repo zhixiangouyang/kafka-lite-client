@@ -54,7 +54,9 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         
         // 刷新元数据
         for (String topic : topics) {
-            metadataManager.refreshMetadata(topic);
+            subscribedTopics.add(topic);
+            // 初始化时刷新元数据 - 正常情况
+            metadataManager.refreshMetadata(topic, false, false);
             topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
         }
         
@@ -102,7 +104,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                     // 刷新所有订阅的topic的元数据
                     for (String topic : subscribedTopics) {
                         try {
-                            metadataManager.refreshMetadata(topic);
+                            // 定期刷新元数据 - 正常情况
+                            metadataManager.refreshMetadata(topic, false, false);
                             Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
                             topicPartitionLeaders.put(topic, leaders);
                             
@@ -211,7 +214,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                         retryCount++;
                         if (retryCount >= config.getMaxRetries()) {
                             System.err.println("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries");
-                            metadataManager.refreshMetadata(topic);
+                            // 重试失败后刷新元数据 - 错误触发
+                            metadataManager.refreshMetadata(topic, true, false);
                             topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
                             // 重试失败后抛出异常，而不是静默失败
                             throw new RuntimeException("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries", e);

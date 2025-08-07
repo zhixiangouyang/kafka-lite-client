@@ -95,7 +95,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                         long remainingWaitTime = lingerMs;
                         
                         // 降低批处理阈值，更快触发发送
-                        int currentBatchSize = Math.max(10, batchSize / 4);
+                        int currentBatchSize = Math.max(10, batchSize);
                         
                         while (batch.size() < currentBatchSize && remainingWaitTime > 0) {
                             ProducerRecord record = recordQueue.poll(remainingWaitTime, TimeUnit.MILLISECONDS);
@@ -116,9 +116,9 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                             
                             for (ProducerRecord record : batch) {
                                 String topic = record.getTopic();
-                                // 确保元数据已刷新
+                                // 确保元数据已刷新 - 生产者上下文
                                 if (!topicPartitionBatches.containsKey(topic)) {
-                                    metadataManager.refreshMetadata(topic);
+                                    metadataManager.refreshMetadata(topic, false, true);
                                     topicPartitionBatches.put(topic, new ConcurrentHashMap<>());
                                 }
                                 
@@ -285,8 +285,8 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             while (retries < maxRetries && !interrupted) {
                 try {
                     Thread.sleep(retryBackoffMs);
-                    // 刷新元数据
-                    metadataManager.refreshMetadata(topic);
+                    // 刷新元数据 - 生产者重试，错误触发
+                    metadataManager.refreshMetadata(topic, true, true);
                     System.out.printf("重试发送消息 (第%d次): topic=%s, partition=%d%n", 
                         retries + 1, topic, partition);
                     // 重试发送
@@ -326,8 +326,8 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         String key = record.getKey();
         String value = record.getValue();
 
-        // 1. 刷新元数据（若已存在可内部跳过）
-        metadataManager.refreshMetadata(topic);
+        // 1. 刷新元数据（若已存在可内部跳过）- 生产者上下文
+        metadataManager.refreshMetadata(topic, false, true);
 
         // 2. 获取partition -> broker 映射
         Map<Integer, String> partitionToBroker = metadataManager.getPartitionLeaders(topic);

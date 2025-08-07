@@ -84,27 +84,40 @@ public class ConsumerCoordinator {
     }
     
     private void findCoordinator() {
-        try {
-            ByteBuffer request = FindCoordinatorRequestBuilder.build(clientId, groupId, 1);
-            // 使用bootstrapServers而不是硬编码的localhost:9092
-            String bootstrapServer = bootstrapServers.get(0);
-            String[] parts = bootstrapServer.split(":");
-            String host = parts[0];
-            int port = Integer.parseInt(parts[1]);
-            ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, request);
-            FindCoordinatorResponseParser.CoordinatorInfo info = FindCoordinatorResponseParser.parse(response);
-            
-            if (info.getErrorCode() != 0) {
-                throw new RuntimeException("Failed to find coordinator: error=" + info.getErrorCode());
+        Exception lastException = null;
+        
+        // 尝试所有bootstrap servers找到协调器
+        for (String bootstrapServer : bootstrapServers) {
+            try {
+                ByteBuffer request = FindCoordinatorRequestBuilder.build(clientId, groupId, 1);
+                String[] parts = bootstrapServer.split(":");
+                String host = parts[0];
+                int port = Integer.parseInt(parts[1]);
+                
+                System.out.printf("[ConsumerCoordinator] 尝试从broker %s:%d 查找协调器\n", host, port);
+                ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, request);
+                FindCoordinatorResponseParser.CoordinatorInfo info = FindCoordinatorResponseParser.parse(response);
+                
+                if (info.getErrorCode() == 0) {
+                    this.coordinatorHost = info.getHost();
+                    this.coordinatorPort = info.getPort();
+                    System.out.printf("✅ [ConsumerCoordinator] 成功找到协调器: %s:%d (通过broker %s:%d)\n", 
+                        this.coordinatorHost, this.coordinatorPort, host, port);
+                    return; // 成功找到，直接返回
+                } else {
+                    System.out.printf("❌ [ConsumerCoordinator] Broker %s:%d 返回错误: errorCode=%d\n", 
+                        host, port, info.getErrorCode());
+                    lastException = new RuntimeException("Failed to find coordinator: error=" + info.getErrorCode());
+                }
+                
+            } catch (Exception e) {
+                System.out.printf("❌ [ConsumerCoordinator] 无法连接到broker %s: %s\n", bootstrapServer, e.getMessage());
+                lastException = e;
             }
-            
-            this.coordinatorHost = info.getHost();
-            this.coordinatorPort = info.getPort();
-            System.out.printf("[ConsumerCoordinator] Found coordinator: %s:%d\n", this.coordinatorHost, this.coordinatorPort);
-            
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to find coordinator", e);
         }
+        
+        // 如果所有broker都失败了
+        throw new RuntimeException("Failed to find coordinator from any broker", lastException);
     }
     
     private void joinGroup() {
@@ -323,13 +336,9 @@ public class ConsumerCoordinator {
                 // 新增：检查当前状态
                 System.out.printf("[DEBUG] Heartbeat check - clientId=%s, groupId=%s, memberId=%s, generationId=%d, groupState=%s, assignments.size=%d\n", 
                     clientId, groupId, memberId, generationId, groupState, assignments.size());
-                
-                System.out.printf("[DEBUG] Heartbeat thread running: clientId=%s, groupId=%s\n", clientId, groupId);
+
                 ByteBuffer request = HeartbeatRequestBuilder.build(clientId, groupId, generationId, memberId);
-                
-                // 新增：打印心跳请求详情
-                System.out.printf("[DEBUG] Sending heartbeat - clientId=%s, groupId=%s, memberId=%s, generationId=%d\n", 
-                    clientId, groupId, memberId, generationId);
+
                 
                 ByteBuffer response = coordinatorSocket.sendAndReceive(request);
                 short errorCode = HeartbeatResponseParser.parse(response);
@@ -390,7 +399,16 @@ public class ConsumerCoordinator {
                 }
             }
             
-            // 重新建立连接
+            // 🔧 关键修复：重新查找协调器（可能已经切换到其他broker）
+            try {
+                System.out.println("🔄 [ConsumerCoordinator] 重新查找协调器...");
+                findCoordinator();
+            } catch (Exception e) {
+                System.err.printf("❌ [ConsumerCoordinator] 重新查找协调器失败: %s\n", e.getMessage());
+                throw e;
+            }
+            
+            // 重新建立连接到新的协调器
             this.coordinatorSocket = new KafkaSingleSocketClient(coordinatorHost, coordinatorPort);
             System.out.printf("[DEBUG] coordinatorSocket status: %s\n", coordinatorSocket == null ? "null" : "open");
             
@@ -399,7 +417,7 @@ public class ConsumerCoordinator {
             // 重新同步组
             syncGroup();
             
-            System.out.println("[ConsumerCoordinator] Successfully rejoined group");
+            System.out.println("✅ [ConsumerCoordinator] Successfully rejoined group");
             synchronized (assignmentLock) {
                 assignmentLock.notifyAll();
             }
@@ -544,7 +562,8 @@ public class ConsumerCoordinator {
         for (String topic : subscribedTopics) {
             List<Integer> partitions = new ArrayList<>();
             if (metadataManager != null) {
-                metadataManager.refreshMetadata(topic);
+                // 获取topic分区信息 - 消费者上下文，正常情况
+                metadataManager.refreshMetadata(topic, false, false);
                 Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
                 System.out.println("[DEBUG] topic=" + topic + " 分区leaders: " + leaders);
                 if (leaders != null && !leaders.isEmpty()) {

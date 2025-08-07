@@ -9,10 +9,15 @@ public class ConsumerConfig {
     private long retryBackoffMs = 100;
     private long heartbeatIntervalMs = 3000;
     
-    // 新增：定期元数据刷新相关配置
+    // 优化：元数据刷新相关配置
     private boolean enablePeriodicMetadataRefresh = true;
-    private long metadataRefreshIntervalMs = 300000; // 5分钟
-    private int metadataConnectionPoolSize = 10; // 元数据连接池大小
+    private long metadataRefreshIntervalMs = 300000; // 5分钟 - 保持默认值，适合生产环境
+    private int metadataConnectionPoolSize = 5; // 减少连接池大小，降低资源消耗
+    
+    // 新增：智能刷新配置
+    private boolean enableSmartMetadataRefresh = true; // 启用智能刷新
+    private long metadataRefreshOnErrorDelayMs = 30000; // 出错后30秒重试
+    private int maxConsecutiveErrors = 3; // 最大连续错误次数
 
     public boolean isEnableAutoCommit() {
         return enableAutoCommit;
@@ -93,5 +98,30 @@ public class ConsumerConfig {
 
     public void setMetadataConnectionPoolSize(int metadataConnectionPoolSize) {
         this.metadataConnectionPoolSize = metadataConnectionPoolSize;
+    }
+    
+    // 新增：智能元数据刷新相关getter/setter
+    public boolean isEnableSmartMetadataRefresh() {
+        return enableSmartMetadataRefresh;
+    }
+
+    public void setEnableSmartMetadataRefresh(boolean enableSmartMetadataRefresh) {
+        this.enableSmartMetadataRefresh = enableSmartMetadataRefresh;
+    }
+
+    public long getMetadataRefreshOnErrorDelayMs() {
+        return metadataRefreshOnErrorDelayMs;
+    }
+
+    public void setMetadataRefreshOnErrorDelayMs(long metadataRefreshOnErrorDelayMs) {
+        this.metadataRefreshOnErrorDelayMs = metadataRefreshOnErrorDelayMs;
+    }
+
+    public int getMaxConsecutiveErrors() {
+        return maxConsecutiveErrors;
+    }
+
+    public void setMaxConsecutiveErrors(int maxConsecutiveErrors) {
+        this.maxConsecutiveErrors = maxConsecutiveErrors;
     }
 } 

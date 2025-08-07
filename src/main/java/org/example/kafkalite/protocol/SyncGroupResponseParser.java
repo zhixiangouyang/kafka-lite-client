@@ -38,15 +38,15 @@ public class SyncGroupResponseParser {
             int originalPosition = buffer.position();
             buffer.get(allBytes);
             buffer.position(originalPosition);
-            System.out.printf("[SyncGroupResponseParser] 响应字节流: %s\n", bytesToHex(allBytes));
+//            System.out.printf("[SyncGroupResponseParser] 响应字节流: %s\n", bytesToHex(allBytes));
             
             // 跳过总长度
             int totalSize = buffer.getInt();
-            System.out.printf("[SyncGroupResponseParser] totalSize=%d\n", totalSize);
+//            System.out.printf("[SyncGroupResponseParser] totalSize=%d\n", totalSize);
             
             // 读取correlationId
             int correlationId = buffer.getInt();
-            System.out.printf("[SyncGroupResponseParser] correlationId=%d\n", correlationId);
+//            System.out.printf("[SyncGroupResponseParser] correlationId=%d\n", correlationId);
             
             // 读取errorCode
             short errorCode = buffer.getShort();

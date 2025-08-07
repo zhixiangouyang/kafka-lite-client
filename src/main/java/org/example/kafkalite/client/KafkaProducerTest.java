@@ -37,8 +37,14 @@ public class KafkaProducerTest {
     
     public static void main(String[] args) {
         // 1. 配置 broker 地址
+//        消费者组测试
 //        String broker = "10.251.183.199:27462";
-        String broker = "localhost:9093";
+
+//        broker测试
+        String broker = "10.251.176.5:19092";
+
+//        本地测试
+//        String broker = "localhost:9093";
         if (args.length > 0) {
             broker = args[0];
         }
@@ -166,8 +172,10 @@ public class KafkaProducerTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
                                 
                                 ProducerRecord record = new ProducerRecord(
-                                    "cluster1-test-topic",
-                                    "key" + localIndex, 
+//                                    "ouyangTest6",
+//                                    "cluster1-test-topic",
+                                    "broker-test-topic",
+                                    "key" + localIndex,
                                     messageValue
                                 );
                                 

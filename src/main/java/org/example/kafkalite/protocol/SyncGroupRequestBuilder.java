@@ -100,13 +100,12 @@ public class SyncGroupRequestBuilder {
             java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
             dos.writeShort(0); // version
             dos.writeInt(topicPartitions.size()); // topic count
-            System.out.printf("[encodeMemberAssignment] version=0, topicCount=%d\n", topicPartitions.size());
             for (Map.Entry<String, List<Integer>> entry : topicPartitions.entrySet()) {
                 byte[] topicBytes = entry.getKey().getBytes(StandardCharsets.UTF_8);
                 dos.writeShort(topicBytes.length);
                 dos.write(topicBytes);
                 dos.writeInt(entry.getValue().size());
-                System.out.printf("[encodeMemberAssignment] topic=%s, topicBytes.length=%d, partitionCount=%d\n", entry.getKey(), topicBytes.length, entry.getValue().size());
+//                System.out.printf("[encodeMemberAssignment] topic=%s, topicBytes.length=%d, partitionCount=%d\n", entry.getKey(), topicBytes.length, entry.getValue().size());
                 for (Integer partition : entry.getValue()) {
                     dos.writeInt(partition);
                     System.out.printf("[encodeMemberAssignment]   partition=%d\n", partition);
@@ -115,7 +114,7 @@ public class SyncGroupRequestBuilder {
             dos.writeInt(0); // user_data length = 0
             dos.flush();
             byte[] result = baos.toByteArray();
-            System.out.printf("[encodeMemberAssignment] total assignmentBytes.length=%d\n", result.length);
+//            System.out.printf("[encodeMemberAssignment] total assignmentBytes.length=%d\n", result.length);
             return result;
         } catch (Exception e) {
             throw new RuntimeException("Failed to encode member assignment", e);

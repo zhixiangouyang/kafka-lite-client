@@ -44,8 +44,15 @@ public class ConsumerBrokerSwitchTest {
         // 选项3：纯远程配置（基于日志中看到的实际leader地址）
         
         List<String> brokers = Arrays.asList(
-            "localhost:9093",        // 本地broker1
-            "localhost:9094"         // 本地broker2
+            // 本地broker1
+//            "localhost:9093",
+            // 本地broker2
+//            "localhost:9094"
+
+            // 线上broker
+            "10.251.176.5:19092",
+            "10.251.135.195:19092",
+            "10.251.184.8:19092"
         );
         System.out.println("配置的Broker列表: " + brokers);
         System.out.println("使用本地Kafka集群进行broker切换测试");
@@ -58,7 +65,11 @@ public class ConsumerBrokerSwitchTest {
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
         config.setHeartbeatIntervalMs(3000);        // 心跳间隔3秒
-        config.setMetadataRefreshIntervalMs(5000);  // 元数据刷新间隔5秒
+        // 优化：根据环境调整元数据刷新间隔
+        // 测试环境：30秒（快速检测broker切换）
+        // 生产环境：建议5分钟（300000ms）
+        // 配置较短的刷新间隔用于测试智能刷新策略
+        config.setMetadataRefreshIntervalMs(10000); // 10秒，用于测试正常情况下的刷新频率
 
         // 3. 创建消费者实例
         consumer = new KafkaLiteConsumerImpl(
@@ -69,7 +80,8 @@ public class ConsumerBrokerSwitchTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("cluster1-test-topic"));
+//            consumer.subscribe(Arrays.asList("cluster1-test-topic"));
+            consumer.subscribe(Arrays.asList("broker-test-topic"));
 
             System.out.println("开始消费消息...");
             System.out.println("现在可以手动停止broker来测试切换:");

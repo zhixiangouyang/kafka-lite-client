@@ -76,7 +76,7 @@ public class JoinGroupRequestBuilder {
             buffer.mark();
             buffer.get(bytes);
             buffer.reset();
-            System.out.print("[JoinGroupRequestBuilder] 请求字节流: ");
+//            System.out.print("[JoinGroupRequestBuilder] 请求字节流: ");
             for (byte b : bytes) System.out.printf("%02x ", b);
             System.out.println();
             System.out.printf("[DEBUG] JoinGroupRequestBuilder.build: totalSize=%d, clientId=%s, groupId=%s, memberId=%s, topics=%s\n", totalSize, clientId, groupId, memberId, topics);
@@ -88,7 +88,7 @@ public class JoinGroupRequestBuilder {
     }
 
     private static byte[] encodeMetadata(List<String> topics) {
-        System.out.printf("[DEBUG] encodeMetadata: topics=%s\n", topics);
+//        System.out.printf("[DEBUG] encodeMetadata: topics=%s\n", topics);
         // 计算metadata大小
         int metadataSize = 2; // version
         metadataSize += 4; // topics array size
@@ -113,7 +113,7 @@ public class JoinGroupRequestBuilder {
         metadata.flip();
         byte[] bytes = new byte[metadata.remaining()];
         metadata.get(bytes);
-        System.out.printf("[DEBUG] encodeMetadata: metadataSize=%d, topics=%s\n", metadataSize, topics);
+//        System.out.printf("[DEBUG] encodeMetadata: metadataSize=%d, topics=%s\n", metadataSize, topics);
         return bytes;
     }
     

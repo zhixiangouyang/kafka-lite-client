@@ -22,9 +22,12 @@ public class MetadataManagerImpl implements MetadataManager {
     
     // 用于跟踪broker切换
     private volatile String lastUsedBroker = null;
+    
+    // 新增：智能元数据刷新策略
+    private final SmartMetadataRefreshStrategy refreshStrategy = new SmartMetadataRefreshStrategy();
 
     public MetadataManagerImpl(List<String> bootstrapServers) {
-        this(bootstrapServers, 10); // 默认连接池大小10
+        this(bootstrapServers, 5); // 默认连接池大小10
     }
     
     public MetadataManagerImpl(List<String> bootstrapServers, int connectionPoolSize) {
@@ -86,6 +89,21 @@ public class MetadataManagerImpl implements MetadataManager {
 
     @Override
     public void refreshMetadata(String topic) {
+        refreshMetadata(topic, false, false);
+    }
+    
+    /**
+     * 刷新元数据（增强版本）
+     * @param topic 主题名称
+     * @param isErrorTriggered 是否由错误触发
+     * @param isProducerContext 是否在生产者上下文中
+     */
+    public void refreshMetadata(String topic, boolean isErrorTriggered, boolean isProducerContext) {
+        // 智能刷新检查
+        if (!refreshStrategy.shouldRefresh(topic, isErrorTriggered, isProducerContext)) {
+            return;
+        }
+        
         try {
             // 确保连接池已初始化
             if (!connectionPoolsInitialized) {
@@ -144,12 +162,18 @@ public class MetadataManagerImpl implements MetadataManager {
             if (leaders != null) {
                 topicPartitionLeaders.put(topic, leaders);
                 System.out.printf("[MetadataManagerImpl] 更新分区leader: topic=%s, leaders=%s\n", topic, leaders);
+                // 记录成功
+                refreshStrategy.recordSuccess(topic);
             } else {
                 System.err.printf("[MetadataManagerImpl] 未找到分区leader: topic=%s\n", topic);
+                // 记录错误
+                refreshStrategy.recordError(topic);
             }
 
         } catch (Exception e) {
             System.err.printf("[MetadataManagerImpl] 刷新元数据失败: topic=%s, 错误=%s\n", topic, e.getMessage());
+            // 记录错误
+            refreshStrategy.recordError(topic);
             throw new RuntimeException("Failed to refresh metadata: " + e.getMessage(), e);
         }
     }

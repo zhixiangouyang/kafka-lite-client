@@ -53,17 +53,17 @@ public class FetchRequestBuilder {
         buf.flip();
 
         // 打印所有参数和最终字节流
-        System.out.printf("[FetchRequestBuilder] 构造参数: clientId=%s, topic=%s, partition=%d, fetchOffset=%d, maxBytes=%d, correlationId=%d\n",
-            clientId, topic, partition, fetchOffset, maxBytes, correlationId);
+//        System.out.printf("[FetchRequestBuilder] 构造参数: clientId=%s, topic=%s, partition=%d, fetchOffset=%d, maxBytes=%d, correlationId=%d\n",
+//            clientId, topic, partition, fetchOffset, maxBytes, correlationId);
         byte[] bytes = new byte[buf.remaining()];
         buf.mark();
         buf.get(bytes);
         buf.reset();
-        System.out.print("[FetchRequestBuilder] 请求字节流: ");
-        for (byte b : bytes) {
-            System.out.printf("%02x ", b);
-        }
-        System.out.println();
+//        System.out.print("[FetchRequestBuilder] 请求字节流: ");
+//        for (byte b : bytes) {
+//            System.out.printf("%02x ", b);
+//        }
+//        System.out.println();
 
         return buf;
     }
