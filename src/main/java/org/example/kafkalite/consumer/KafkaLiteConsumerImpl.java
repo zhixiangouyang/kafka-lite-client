@@ -50,11 +50,10 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
 
     @Override
     public void subscribe(List<String> topics) {
-        this.subscribedTopics = topics;
+        this.subscribedTopics = new ArrayList<>(topics);  // 创建可变副本
         
         // 刷新元数据
         for (String topic : topics) {
-            subscribedTopics.add(topic);
             // 初始化时刷新元数据 - 正常情况
             metadataManager.refreshMetadata(topic, false, false);
             topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));

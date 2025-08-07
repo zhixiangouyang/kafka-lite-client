@@ -30,10 +30,10 @@ public class KafkaConsumerTest {
 
         // 1. 配置 broker 地址
         // 消费者组测试
-//         String broker = "10.251.183.199:27462";
+         String broker = "10.251.183.199:27462";
 
         // broker测试
-        String broker = "10.251.176.5:19092";
+//        String broker = "10.251.176.5:19092";
         // 本地测试
 
 //        String broker = "localhost:9092";
@@ -56,7 +56,7 @@ public class KafkaConsumerTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("broker-test-topic"));
+            consumer.subscribe(Arrays.asList("ouyangTest6"));
 
             System.out.println("开始消费消息...");
             System.out.println("按 Ctrl+C 停止消费");
