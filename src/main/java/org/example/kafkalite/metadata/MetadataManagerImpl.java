@@ -115,6 +115,11 @@ public class MetadataManagerImpl implements MetadataManager {
      * @param isProducerContext 是否在生产者上下文中
      */
     public void refreshMetadata(String topic, boolean isErrorTriggered, boolean isProducerContext) {
+        // 🔧 兜底机制：每次refresh都检查DNS变化（主动发现域名指向变更）
+        if (originalDomain != null) {
+            checkDnsChangesProactively();
+        }
+
         // 智能刷新检查
         if (!refreshStrategy.shouldRefresh(topic, isErrorTriggered, isProducerContext)) {
             return;
@@ -337,12 +342,55 @@ public class MetadataManagerImpl implements MetadataManager {
          }
      }
      
-     /**
-      * 获取当前的bootstrap servers
-      */
-     public List<String> getBootstrapServers() {
-         return new ArrayList<>(bootstrapServers);
-     }
+         /**
+     * 获取当前的bootstrap servers
+     */
+    public List<String> getBootstrapServers() {
+        return new ArrayList<>(bootstrapServers);
+    }
+    
+    /**
+     * 主动检查DNS变化（兜底机制）
+     * 每次refresh时都检查，发现域名指向变更时主动切换
+     */
+    private void checkDnsChangesProactively() {
+        try {
+            // 重新解析DNS
+            List<String> newBootstrapServers = resolveDomainToIPs(originalDomain);
+            
+            // 检查是否有变化
+            if (!newBootstrapServers.equals(bootstrapServers)) {
+                System.out.printf("[MetadataManagerImpl] 🔍 主动发现DNS变化:\n");
+                System.out.printf("  当前IP列表: %s\n", bootstrapServers);
+                System.out.printf("  新解析IP列表: %s\n", newBootstrapServers);
+                System.out.println("  触发主动切换...");
+                
+                // 更新bootstrap servers
+                this.bootstrapServers = newBootstrapServers;
+                
+                // 清理旧连接池
+                clearOldConnectionPools();
+                connectionPoolsInitialized = false;
+                
+                // 重新初始化连接池
+                initializeConnectionPools();
+                
+                // 通知所有相关组件更新连接
+                notifyBootstrapServersChanged(newBootstrapServers);
+                
+                System.out.printf("[MetadataManagerImpl] ✅ 主动切换完成: %s\n", newBootstrapServers);
+            } else {
+                // DNS没有变化，可以输出调试信息（但不要太频繁）
+                if (System.currentTimeMillis() % 60000 < 1000) { // 大约每分钟输出一次
+                    System.out.printf("[MetadataManagerImpl] 🔍 DNS检查: 无变化 %s\n", bootstrapServers);
+                }
+            }
+            
+        } catch (Exception e) {
+            System.err.printf("[MetadataManagerImpl] 主动DNS检查失败: %s\n", e.getMessage());
+            // 不抛出异常，避免影响正常的metadata刷新
+        }
+    }
     
     // 用于跟踪broker切换的辅助方法
     private String getLastUsedBroker() {

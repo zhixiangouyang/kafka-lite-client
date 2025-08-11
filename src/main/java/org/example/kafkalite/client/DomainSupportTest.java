@@ -59,8 +59,14 @@ public class DomainSupportTest {
             consumer.subscribe(Arrays.asList("cluster-test-topic"));
             
             System.out.println("\n=== 开始持续消费（演示自动DR切换） ===");
-            System.out.println("如果所有broker都失败，会自动重新解析DNS并重试");
-            System.out.println("模拟方法：停止所有当前IP的broker，启动新IP的broker\n");
+            System.out.println("🎯 新功能: 双重DNS检查机制");
+            System.out.println("  1. 主动检查: 每次metadata refresh都检查DNS变化");
+            System.out.println("  2. 被动检查: 所有broker失败时重新解析DNS");
+            System.out.println();
+            System.out.println("📋 测试方法:");
+            System.out.println("  方法1: 修改域名指向，无需停止原broker");
+            System.out.println("  方法2: 停止所有当前IP的broker，启动新IP的broker");
+            System.out.println();
 
             long messageCount = 0;
             long lastStatusTime = System.currentTimeMillis();
@@ -86,8 +92,10 @@ public class DomainSupportTest {
                     long currentTime = System.currentTimeMillis();
                     if (currentTime - lastStatusTime >= 15000) {
                         System.out.printf("\n📊 [状态] 已消费消息数: %d\n", messageCount);
-                        System.out.println("🔄 提醒：停止所有broker测试DNS重解析功能");
-                        System.out.println("   观察 [MetadataManagerImpl] 的DNS重解析日志\n");
+                        System.out.println("🔄 提醒：测试DR切换的两种方法");
+                        System.out.println("   方法1: 修改DNS指向新IP (推荐，原broker可继续运行)");
+                        System.out.println("   方法2: 停止所有broker测试故障恢复");
+                        System.out.println("   观察 [MetadataManagerImpl] 的主动/被动DNS检查日志\n");
                         lastStatusTime = currentTime;
                     }
 
@@ -167,13 +175,22 @@ public class DomainSupportTest {
  * 
  * 4. 关键日志：
  *    [KafkaLiteConsumerImpl] 域名 localhost:9092 解析到 X 个IP: [...]
+ *    
+ *    主动检查（新功能）:
+ *    [MetadataManagerImpl] 🔍 主动发现DNS变化:
+ *    [MetadataManagerImpl]   当前IP列表: [old_ips]
+ *    [MetadataManagerImpl]   新解析IP列表: [new_ips]
+ *    [MetadataManagerImpl] ✅ 主动切换完成: [new_ips]
+ *    
+ *    被动检查（兜底）:
  *    [MetadataManagerImpl] 所有broker都不可用，尝试重新解析DNS...
  *    [MetadataManagerImpl] DNS重解析获得新IP: 旧=[...], 新=[...]
+ *    
+ *    通用处理:
  *    [MetadataManagerImpl] 通知组件bootstrap servers已更新: [...]
  *    [KafkaLiteConsumerImpl] 开始处理bootstrap servers变化...
  *    [KafkaLiteConsumerImpl] 已清空partition leader缓存
  *    [KafkaLiteConsumerImpl] 已更新topic XXX 的partition leaders: {...}
- *    [BROKER切换] 重解析后成功连接到broker: ...
  * 
  * 5. 与传统方案对比：
  *    传统: new KafkaLiteConsumerImpl(groupId, Arrays.asList("ip1:9092", "ip2:9092"), config)
