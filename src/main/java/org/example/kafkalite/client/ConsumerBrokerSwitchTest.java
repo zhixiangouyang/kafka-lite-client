@@ -112,7 +112,7 @@ public class ConsumerBrokerSwitchTest {
                     long currentTime = System.currentTimeMillis();
                     if (currentTime - lastStatusTime >= 10000) {
                         System.out.printf("\n[状态] 已消费消息数: %d\n", messageCount);
-                        System.out.println("🔄 提醒：现在可以停止一个broker来测试故障切换！");
+                        System.out.println("提醒：现在可以停止一个broker来测试故障切换！");
                         System.out.println("   观察 [MetadataManagerImpl] 的切换日志\n");
                         lastStatusTime = currentTime;
                     }

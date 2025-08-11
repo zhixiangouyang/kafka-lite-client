@@ -39,7 +39,7 @@ public class ConsumerCoordinator {
     // 用于分区分配变更通知
     public final Object assignmentLock = new Object();
     
-    private final MetadataManager metadataManager;
+    private MetadataManager metadataManager;
     
     public enum GroupState { UNJOINED, REBALANCING, STABLE }
     private volatile GroupState groupState = GroupState.UNJOINED;
@@ -51,7 +51,12 @@ public class ConsumerCoordinator {
         this.config = config;
         this.bootstrapServers = bootstrapServers; // 新增：保存bootstrapServers
         this.subscribedTopics = new ArrayList<>();
-        this.metadataManager = new MetadataManagerImpl(bootstrapServers);
+        this.metadataManager = null; // 将通过 setMetadataManager 注入
+    }
+    
+    // 新增：设置共享的 MetadataManager
+    public void setMetadataManager(MetadataManager metadataManager) {
+        this.metadataManager = metadataManager;
     }
     
     public void initializeGroup(List<String> topics) {
@@ -88,20 +93,20 @@ public class ConsumerCoordinator {
         
         // 尝试所有bootstrap servers找到协调器
         for (String bootstrapServer : bootstrapServers) {
-            try {
-                ByteBuffer request = FindCoordinatorRequestBuilder.build(clientId, groupId, 1);
-                String[] parts = bootstrapServer.split(":");
-                String host = parts[0];
-                int port = Integer.parseInt(parts[1]);
+        try {
+            ByteBuffer request = FindCoordinatorRequestBuilder.build(clientId, groupId, 1);
+            String[] parts = bootstrapServer.split(":");
+            String host = parts[0];
+            int port = Integer.parseInt(parts[1]);
                 
                 System.out.printf("[ConsumerCoordinator] 尝试从broker %s:%d 查找协调器\n", host, port);
-                ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, request);
-                FindCoordinatorResponseParser.CoordinatorInfo info = FindCoordinatorResponseParser.parse(response);
-                
+            ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, request);
+            FindCoordinatorResponseParser.CoordinatorInfo info = FindCoordinatorResponseParser.parse(response);
+            
                 if (info.getErrorCode() == 0) {
-                    this.coordinatorHost = info.getHost();
-                    this.coordinatorPort = info.getPort();
-                    System.out.printf("✅ [ConsumerCoordinator] 成功找到协调器: %s:%d (通过broker %s:%d)\n", 
+            this.coordinatorHost = info.getHost();
+            this.coordinatorPort = info.getPort();
+                    System.out.printf("[ConsumerCoordinator] 成功找到协调器: %s:%d (通过broker %s:%d)\n",
                         this.coordinatorHost, this.coordinatorPort, host, port);
                     return; // 成功找到，直接返回
                 } else {
@@ -109,8 +114,8 @@ public class ConsumerCoordinator {
                         host, port, info.getErrorCode());
                     lastException = new RuntimeException("Failed to find coordinator: error=" + info.getErrorCode());
                 }
-                
-            } catch (Exception e) {
+            
+        } catch (Exception e) {
                 System.out.printf("❌ [ConsumerCoordinator] 无法连接到broker %s: %s\n", bootstrapServer, e.getMessage());
                 lastException = e;
             }
@@ -336,9 +341,9 @@ public class ConsumerCoordinator {
                 // 新增：检查当前状态
                 System.out.printf("[DEBUG] Heartbeat check - clientId=%s, groupId=%s, memberId=%s, generationId=%d, groupState=%s, assignments.size=%d\n", 
                     clientId, groupId, memberId, generationId, groupState, assignments.size());
-
+                
                 ByteBuffer request = HeartbeatRequestBuilder.build(clientId, groupId, generationId, memberId);
-
+                
                 
                 ByteBuffer response = coordinatorSocket.sendAndReceive(request);
                 short errorCode = HeartbeatResponseParser.parse(response);
@@ -401,10 +406,10 @@ public class ConsumerCoordinator {
             
             // 🔧 关键修复：重新查找协调器（可能已经切换到其他broker）
             try {
-                System.out.println("🔄 [ConsumerCoordinator] 重新查找协调器...");
+                System.out.println("[ConsumerCoordinator] 重新查找协调器...");
                 findCoordinator();
             } catch (Exception e) {
-                System.err.printf("❌ [ConsumerCoordinator] 重新查找协调器失败: %s\n", e.getMessage());
+                System.err.printf("[ConsumerCoordinator] 重新查找协调器失败: %s\n", e.getMessage());
                 throw e;
             }
             
@@ -417,7 +422,7 @@ public class ConsumerCoordinator {
             // 重新同步组
             syncGroup();
             
-            System.out.println("✅ [ConsumerCoordinator] Successfully rejoined group");
+            System.out.println("[ConsumerCoordinator] Successfully rejoined group");
             synchronized (assignmentLock) {
                 assignmentLock.notifyAll();
             }

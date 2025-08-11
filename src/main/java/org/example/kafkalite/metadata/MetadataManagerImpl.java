@@ -7,7 +7,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class MetadataManagerImpl implements MetadataManager {
-    private final List<String> bootstrapServers;
+    private volatile List<String> bootstrapServers;  // 改为volatile，支持动态更新
     
     // 新增：连接池管理
     private final Map<String, KafkaSocketClient.ConnectionPool> connectionPools = new ConcurrentHashMap<>();
@@ -22,9 +22,15 @@ public class MetadataManagerImpl implements MetadataManager {
     
     // 用于跟踪broker切换
     private volatile String lastUsedBroker = null;
-    
+
     // 新增：智能元数据刷新策略
     private final SmartMetadataRefreshStrategy refreshStrategy = new SmartMetadataRefreshStrategy();
+    
+    // 新增：动态DNS支持
+    private final String originalDomain;  // 原始域名:端口，用于重新解析
+    
+    // 新增：bootstrap servers变化回调
+    private Runnable bootstrapServersChangedCallback;
 
     public MetadataManagerImpl(List<String> bootstrapServers) {
         this(bootstrapServers, 5); // 默认连接池大小10
@@ -33,6 +39,16 @@ public class MetadataManagerImpl implements MetadataManager {
     public MetadataManagerImpl(List<String> bootstrapServers, int connectionPoolSize) {
         this.bootstrapServers = bootstrapServers;
         this.connectionPoolSize = connectionPoolSize;
+        this.originalDomain = null;  // 传统模式，不支持动态DNS
+    }
+    
+    /**
+     * 新增：支持动态DNS的构造函数
+     */
+    public MetadataManagerImpl(List<String> bootstrapServers, int connectionPoolSize, String originalDomain) {
+        this.bootstrapServers = bootstrapServers;
+        this.connectionPoolSize = connectionPoolSize;
+        this.originalDomain = originalDomain;  // 保存原始域名，用于重新解析
     }
     
     // 新增：初始化连接池
@@ -109,9 +125,7 @@ public class MetadataManagerImpl implements MetadataManager {
             if (!connectionPoolsInitialized) {
                 initializeConnectionPools();
             }
-            
-            System.out.printf("[MetadataManagerImpl] 刷新元数据: topic=%s\n", topic);
-            
+
             // 1. 编码 MetadataRequest 请求体
             List<String> topics = new ArrayList<>();
             topics.add(topic);
@@ -125,13 +139,13 @@ public class MetadataManagerImpl implements MetadataManager {
             String lastSuccessfulBroker = null;
             for (String brokerAddress : bootstrapServers) {
                 try {
-                    System.out.printf("🔍 [MetadataManagerImpl] 尝试连接broker: %s (topic=%s)\n", brokerAddress, topic);
+                    System.out.printf("[MetadataManagerImpl] 尝试连接broker: %s (topic=%s)\n", brokerAddress, topic);
                     response = sendRequestWithConnectionPool(brokerAddress, request);
-                    System.out.printf("✅ [BROKER切换] 成功连接到broker: %s (topic=%s)\n", brokerAddress, topic);
+                    System.out.printf("[BROKER切换] 成功连接到broker: %s (topic=%s)\n", brokerAddress, topic);
                     lastSuccessfulBroker = brokerAddress;
                     break; // 成功就退出循环
                 } catch (Exception e) {
-                    System.err.printf("❌ [MetadataManagerImpl] Broker %s 不可用: %s\n", brokerAddress, e.getMessage());
+                    System.err.printf("[MetadataManagerImpl] Broker %s 不可用: %s\n", brokerAddress, e.getMessage());
                     lastException = e;
                     // 继续尝试下一个broker
                 }
@@ -139,15 +153,58 @@ public class MetadataManagerImpl implements MetadataManager {
             
             // 如果切换到了不同的broker，输出切换日志
             if (lastSuccessfulBroker != null && !lastSuccessfulBroker.equals(getLastUsedBroker())) {
-                System.out.printf("🔄 [BROKER切换] 元数据服务切换: %s -> %s\n", 
+                System.out.printf("[BROKER切换] 元数据服务切换: %s -> %s\n",
                     getLastUsedBroker() != null ? getLastUsedBroker() : "初始连接", 
                     lastSuccessfulBroker);
                 setLastUsedBroker(lastSuccessfulBroker);
             }
             
-            // 如果所有broker都失败了，抛出最后一个异常
+            // 如果所有broker都失败了，尝试重新解析DNS
             if (response == null) {
-                throw new RuntimeException("所有broker都不可用", lastException);
+                if (originalDomain != null) {
+                    System.out.println("[MetadataManagerImpl] 所有broker都不可用，尝试重新解析DNS...");
+                    List<String> newBootstrapServers = resolveDomainToIPs(originalDomain);
+                    
+                    // 检查是否获得了新的IP
+                    if (!newBootstrapServers.equals(bootstrapServers)) {
+                        System.out.printf("[MetadataManagerImpl] DNS重解析获得新IP: 旧=%s, 新=%s\n", 
+                            bootstrapServers, newBootstrapServers);
+                        
+                        // 更新bootstrap servers
+                        this.bootstrapServers = newBootstrapServers;
+                        
+                        // 清理旧连接池
+                        clearOldConnectionPools();
+                        connectionPoolsInitialized = false;
+                        
+                        // 重新初始化连接池
+                        initializeConnectionPools();
+                        
+                        // 🔧 重要：通知所有相关组件更新连接
+                        notifyBootstrapServersChanged(newBootstrapServers);
+                        
+                        // 用新的IP重试一次
+                        for (String brokerAddress : bootstrapServers) {
+                            try {
+                                System.out.printf("[MetadataManagerImpl] 重解析后尝试连接broker: %s (topic=%s)\n", brokerAddress, topic);
+                                response = sendRequestWithConnectionPool(brokerAddress, request);
+                                System.out.printf("[BROKER切换] 重解析后成功连接到broker: %s (topic=%s)\n", brokerAddress, topic);
+                                lastSuccessfulBroker = brokerAddress;
+                                break;
+                            } catch (Exception e) {
+                                System.err.printf("[MetadataManagerImpl] 重解析后Broker %s 仍不可用: %s\n", brokerAddress, e.getMessage());
+                                lastException = e;
+                            }
+                        }
+                    } else {
+                        System.out.println("[MetadataManagerImpl] DNS重解析未获得新IP，IP列表未变化");
+                    }
+                }
+                
+                // 如果重解析后仍然失败，抛出异常
+                if (response == null) {
+                    throw new RuntimeException("所有broker都不可用（包括重解析后的IP）", lastException);
+                }
             }
 
             // 4. 解析响应
@@ -196,6 +253,96 @@ public class MetadataManagerImpl implements MetadataManager {
         }
         connectionPools.clear();
     }
+    
+    /**
+     * 清理旧的连接池
+     */
+    private void clearOldConnectionPools() {
+        System.out.println("[MetadataManagerImpl] 清理旧连接池...");
+        for (KafkaSocketClient.ConnectionPool pool : connectionPools.values()) {
+            try {
+                pool.close();
+            } catch (Exception e) {
+                System.err.printf("[MetadataManagerImpl] 关闭旧连接池失败: %s\n", e.getMessage());
+            }
+        }
+        connectionPools.clear();
+    }
+    
+    /**
+     * 解析域名为IP地址列表
+     */
+    private List<String> resolveDomainToIPs(String domainWithPort) {
+        List<String> ips = new ArrayList<>();
+        
+        String[] parts = domainWithPort.split(":");
+        if (parts.length != 2) {
+            throw new IllegalArgumentException("域名格式错误，应为 domain:port，实际: " + domainWithPort);
+        }
+        
+        String domain = parts[0];
+        String port = parts[1];
+        
+        // 如果已经是IP地址，直接返回
+        if (isIpAddress(domain)) {
+            ips.add(domainWithPort);
+            return ips;
+        }
+        
+        try {
+            java.net.InetAddress[] addresses = java.net.InetAddress.getAllByName(domain);
+            for (java.net.InetAddress address : addresses) {
+                String ip = address.getHostAddress();
+                ips.add(ip + ":" + port);
+                System.out.printf("[MetadataManagerImpl] DNS重解析: %s -> %s:%s\n", domain, ip, port);
+            }
+            
+            if (ips.isEmpty()) {
+                throw new RuntimeException("域名重解析失败，未获取到任何IP: " + domain);
+            }
+            
+        } catch (java.net.UnknownHostException e) {
+            throw new RuntimeException("域名重解析失败: " + domain + ", 错误: " + e.getMessage(), e);
+        }
+        
+        return ips;
+    }
+    
+    /**
+     * 检查是否为IP地址
+     */
+    private boolean isIpAddress(String host) {
+        String ipPattern = "^([0-9]{1,3}\\.){3}[0-9]{1,3}$";
+        return host.matches(ipPattern);
+    }
+    
+    /**
+     * 设置bootstrap servers变化回调
+     */
+    public void setBootstrapServersChangedCallback(Runnable callback) {
+        this.bootstrapServersChangedCallback = callback;
+    }
+    
+         /**
+      * 通知bootstrap servers已变化
+      */
+     private void notifyBootstrapServersChanged(List<String> newBootstrapServers) {
+         System.out.printf("[MetadataManagerImpl] 通知组件bootstrap servers已更新: %s\n", newBootstrapServers);
+         if (bootstrapServersChangedCallback != null) {
+             try {
+                 bootstrapServersChangedCallback.run();
+             } catch (Exception e) {
+                 System.err.printf("[MetadataManagerImpl] 执行bootstrap servers变化回调失败: %s\n", e.getMessage());
+             }
+         }
+     }
+     
+     /**
+      * 获取当前的bootstrap servers
+      */
+     public List<String> getBootstrapServers() {
+         return new ArrayList<>(bootstrapServers);
+     }
     
     // 用于跟踪broker切换的辅助方法
     private String getLastUsedBroker() {

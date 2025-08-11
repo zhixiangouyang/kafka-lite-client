@@ -18,6 +18,11 @@ public class ConsumerConfig {
     private boolean enableSmartMetadataRefresh = true; // 启用智能刷新
     private long metadataRefreshOnErrorDelayMs = 30000; // 出错后30秒重试
     private int maxConsecutiveErrors = 3; // 最大连续错误次数
+    
+    // DR相关配置
+    private Long dnsTtlMs = 300000L; // DNS TTL: 5分钟
+    private Long healthCheckIntervalMs = 30000L; // 健康检查间隔: 30秒
+    private Integer maxRetryCount = 3; // 最大重试次数
 
     public boolean isEnableAutoCommit() {
         return enableAutoCommit;
@@ -123,5 +128,30 @@ public class ConsumerConfig {
 
     public void setMaxConsecutiveErrors(int maxConsecutiveErrors) {
         this.maxConsecutiveErrors = maxConsecutiveErrors;
+    }
+    
+    // DR相关的getter和setter
+    public Long getDnsTtlMs() {
+        return dnsTtlMs;
+    }
+    
+    public void setDnsTtlMs(Long dnsTtlMs) {
+        this.dnsTtlMs = dnsTtlMs;
+    }
+    
+    public Long getHealthCheckIntervalMs() {
+        return healthCheckIntervalMs;
+    }
+    
+    public void setHealthCheckIntervalMs(Long healthCheckIntervalMs) {
+        this.healthCheckIntervalMs = healthCheckIntervalMs;
+    }
+    
+    public Integer getMaxRetryCount() {
+        return maxRetryCount;
+    }
+    
+    public void setMaxRetryCount(Integer maxRetryCount) {
+        this.maxRetryCount = maxRetryCount;
     }
 } 

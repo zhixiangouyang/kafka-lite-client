@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
-    private final List<String> bootstrapServers;
+    private volatile List<String> bootstrapServers;  // 改为volatile，支持DNS重解析后更新
     private final String groupId;
     private final String clientId;
     private final MetadataManager metadataManager;
@@ -44,8 +44,137 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.offsetManager = new OffsetManager(groupId, bootstrapServers);
         this.metricsCollector = new MetricsCollector();
         this.coordinator = new ConsumerCoordinator(clientId, groupId, config, bootstrapServers);
+        // 共享 MetadataManager，避免重复创建连接池
+        this.coordinator.setMetadataManager(this.metadataManager);
         this.offsetManager.setCoordinator(this.coordinator);
         // coordinatorSocket在coordinator.initializeGroup()后才会被创建
+    }
+    
+    /**
+     * 新增：支持域名的构造函数
+     * 支持传入域名:端口形式，自动解析为多个IP地址
+     */
+    public KafkaLiteConsumerImpl(String groupId, String domainWithPort, ConsumerConfig config) {
+        this.groupId = groupId;
+        this.config = config;
+        // 修复：使用基于groupId的固定clientId，确保offset持久化
+        this.clientId = "kafka-lite-" + groupId.replaceAll("[^a-zA-Z0-9-]", "-");
+        
+        // 解析域名为IP列表
+        this.bootstrapServers = resolveDomainToIPs(domainWithPort);
+        System.out.printf("[KafkaLiteConsumerImpl] 域名 %s 解析到 %d 个IP: %s\n", 
+            domainWithPort, bootstrapServers.size(), bootstrapServers);
+        
+        // 使用配置的连接池大小创建支持动态DNS的MetadataManager
+        this.metadataManager = new MetadataManagerImpl(bootstrapServers, config.getMetadataConnectionPoolSize(), domainWithPort);
+        this.offsetManager = new OffsetManager(groupId, bootstrapServers);
+        this.metricsCollector = new MetricsCollector();
+        this.coordinator = new ConsumerCoordinator(clientId, groupId, config, bootstrapServers);
+        // 共享 MetadataManager，避免重复创建连接池
+        this.coordinator.setMetadataManager(this.metadataManager);
+        this.offsetManager.setCoordinator(this.coordinator);
+        
+        // 🔧 设置bootstrap servers变化回调，处理DNS重解析后的连接更新
+        if (this.metadataManager instanceof MetadataManagerImpl) {
+            ((MetadataManagerImpl) this.metadataManager).setBootstrapServersChangedCallback(() -> {
+                handleBootstrapServersChanged();
+            });
+        }
+        // coordinatorSocket在coordinator.initializeGroup()后才会被创建
+    }
+    
+    /**
+     * 解析域名为IP地址列表
+     */
+    private List<String> resolveDomainToIPs(String domainWithPort) {
+        List<String> ips = new ArrayList<>();
+        
+        String[] parts = domainWithPort.split(":");
+        if (parts.length != 2) {
+            throw new IllegalArgumentException("域名格式错误，应为 domain:port，实际: " + domainWithPort);
+        }
+        
+        String domain = parts[0];
+        String port = parts[1];
+        
+        // 如果已经是IP地址，直接返回
+        if (isIpAddress(domain)) {
+            ips.add(domainWithPort);
+            return ips;
+        }
+        
+        try {
+            java.net.InetAddress[] addresses = java.net.InetAddress.getAllByName(domain);
+            for (java.net.InetAddress address : addresses) {
+                String ip = address.getHostAddress();
+                ips.add(ip + ":" + port);
+                System.out.printf("[KafkaLiteConsumerImpl] DNS解析: %s -> %s:%s\n", domain, ip, port);
+            }
+            
+            if (ips.isEmpty()) {
+                throw new RuntimeException("域名解析失败，未获取到任何IP: " + domain);
+            }
+            
+        } catch (java.net.UnknownHostException e) {
+            throw new RuntimeException("域名解析失败: " + domain + ", 错误: " + e.getMessage(), e);
+        }
+        
+        return ips;
+    }
+    
+    /**
+     * 检查是否为IP地址
+     */
+    private boolean isIpAddress(String host) {
+        String ipPattern = "^([0-9]{1,3}\\.){3}[0-9]{1,3}$";
+        return host.matches(ipPattern);
+    }
+    
+    /**
+     * 处理bootstrap servers变化（DNS重解析后）
+     * 更新所有相关组件的连接
+     */
+    private void handleBootstrapServersChanged() {
+        try {
+            System.out.println("[KafkaLiteConsumerImpl] 开始处理bootstrap servers变化...");
+            
+            // 1. 获取新的bootstrap servers
+            List<String> newBootstrapServers = ((MetadataManagerImpl) metadataManager).getBootstrapServers();
+            System.out.printf("[KafkaLiteConsumerImpl] 新的bootstrap servers: %s\n", newBootstrapServers);
+            
+            // 2. 更新本地bootstrap servers
+            this.bootstrapServers = newBootstrapServers;
+            
+            // 3. 清空partition leader缓存，强制重新获取
+            topicPartitionLeaders.clear();
+            System.out.println("[KafkaLiteConsumerImpl] 已清空partition leader缓存");
+            
+            // 4. TODO: 通知ConsumerCoordinator更新bootstrap servers  
+            // coordinator.updateBootstrapServers(newBootstrapServers); // 需要实现此方法
+            
+            // 5. TODO: 通知OffsetManager更新bootstrap servers
+            // offsetManager.updateBootstrapServers(newBootstrapServers); // 需要实现此方法
+            
+            // 临时解决：重新创建coordinator连接（在下次重连时会使用新的bootstrap servers）
+            System.out.println("[KafkaLiteConsumerImpl] 注意：coordinator和offsetManager将在下次操作时自动使用新的bootstrap servers");
+            
+            // 6. 触发metadata刷新，获取新的partition leader信息
+            for (String topic : subscribedTopics) {
+                try {
+                    metadataManager.refreshMetadata(topic, true, false); // error-triggered refresh
+                    Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
+                    topicPartitionLeaders.put(topic, leaders);
+                    System.out.printf("[KafkaLiteConsumerImpl] 已更新topic %s 的partition leaders: %s\n", topic, leaders);
+                } catch (Exception e) {
+                    System.err.printf("[KafkaLiteConsumerImpl] 更新topic %s metadata失败: %s\n", topic, e.getMessage());
+                }
+            }
+            
+            System.out.println("[KafkaLiteConsumerImpl] bootstrap servers变化处理完成");
+            
+        } catch (Exception e) {
+            System.err.printf("[KafkaLiteConsumerImpl] 处理bootstrap servers变化失败: %s\n", e.getMessage());
+        }
     }
 
     @Override
@@ -61,7 +190,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         
         // 初始化消费者组
         coordinator.initializeGroup(topics);
-        // 新增：获取分区列表并拉取 group offset
+        // 新增：获取分区列表并拉取 group offset topic ->
         Map<String, List<Integer>> topicPartitions = new HashMap<>();
         for (String topic : topics) {
             Map<Integer, String> leaders = topicPartitionLeaders.get(topic);

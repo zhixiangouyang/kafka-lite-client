@@ -40,8 +40,11 @@ public class KafkaProducerTest {
 //        消费者组测试
 //        String broker = "10.251.183.199:27462";
 
-//        broker测试
+//        cluster1
         String broker = "10.251.176.5:19092";
+
+//        cluster2
+//        String broker = "10.251.176.130:19092";
 
 //        本地测试
 //        String broker = "localhost:9093";
@@ -174,7 +177,8 @@ public class KafkaProducerTest {
                                 ProducerRecord record = new ProducerRecord(
 //                                    "ouyangTest6",
 //                                    "cluster1-test-topic",
-                                    "broker-test-topic",
+//                                    "broker-test-topic",
+                                    "cluster-test-topic",
                                     "key" + localIndex,
                                     messageValue
                                 );
