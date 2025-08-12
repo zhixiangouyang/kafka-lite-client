@@ -5,6 +5,7 @@ import org.example.kafkalite.core.KafkaSingleSocketClient;
 import org.example.kafkalite.protocol.*;
 import org.example.kafkalite.metadata.MetadataManager;
 import org.example.kafkalite.metadata.MetadataManagerImpl;
+import org.example.kafkalite.monitor.MetricsCollector;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -41,6 +42,9 @@ public class ConsumerCoordinator {
     
     private MetadataManager metadataManager;
     
+    // 📊 指标收集器
+    private final MetricsCollector metricsCollector;
+    
     public enum GroupState { UNJOINED, REBALANCING, STABLE }
     private volatile GroupState groupState = GroupState.UNJOINED;
     private volatile boolean isRejoining = false; // 新增：防止重复重新加入组
@@ -52,6 +56,7 @@ public class ConsumerCoordinator {
         this.bootstrapServers = bootstrapServers; // 新增：保存bootstrapServers
         this.subscribedTopics = new ArrayList<>();
         this.metadataManager = null; // 将通过 setMetadataManager 注入
+        this.metricsCollector = new MetricsCollector("consumer-coordinator", groupId);
     }
     
     // 新增：设置共享的 MetadataManager
@@ -131,6 +136,14 @@ public class ConsumerCoordinator {
     
     private void joinGroupWithRetry(int retryCount) {
         System.out.printf("[DEBUG] joinGroupWithRetry: retryCount=%d, clientId=%s, groupId=%s, memberId=%s\n", retryCount, clientId, groupId, memberId);
+        
+        long startTime = System.currentTimeMillis();
+        // 📊 指标埋点: JoinGroup尝试
+        Map<String, String> labels = new HashMap<>();
+        labels.put("group_id", groupId);
+        labels.put("retry_count", String.valueOf(retryCount));
+        metricsCollector.incrementCounter("coordinator.join_group.attempt", labels);
+        
         try {
             groupState = GroupState.REBALANCING;
             System.out.printf("[DEBUG] joinGroup: clientId=%s, groupId=%s, memberId=%s, topics=%s, retryCount=%d\n", clientId, groupId, memberId, subscribedTopics, retryCount);
@@ -189,6 +202,13 @@ public class ConsumerCoordinator {
             System.out.printf("[DEBUG] joinGroup result: protocolName=%s, leaderId=%s, memberId=%s, members=%s, allMembers=%s\n", 
                 result.getProtocolName(), result.getLeaderId(), result.getMemberId(), result.getMembers(), this.allMembers);
             
+            // 📊 指标埋点: JoinGroup成功
+            long endTime = System.currentTimeMillis();
+            labels.put("is_leader", String.valueOf(isLeader));
+            labels.put("member_count", String.valueOf(result.getMembers().size()));
+            metricsCollector.incrementCounter("coordinator.join_group.success", labels);
+            metricsCollector.recordLatency("coordinator.join_group.latency", endTime - startTime, labels);
+            
             // 新增：调试信息
             System.out.printf("[DEBUG] joinGroup completed: clientId=%s, memberId=%s, isLeader=%s, allMembers.size=%d\n", 
                 clientId, this.memberId, this.isLeader, this.allMembers.size());
@@ -215,9 +235,17 @@ public class ConsumerCoordinator {
             groupState = GroupState.UNJOINED;
             System.err.printf("[ERROR] joinGroup failed: clientId=%s, groupId=%s, memberId=%s, topics=%s, error=%s\n", clientId, groupId, memberId, subscribedTopics, e.getMessage());
             
+            // 📊 指标埋点: JoinGroup失败
+            labels.put("error_type", e.getClass().getSimpleName());
+            metricsCollector.incrementCounter("coordinator.join_group.error", labels);
+            
             // 如果是超时错误且还有重试次数，则重试
             if ((e instanceof java.net.SocketTimeoutException || e.getCause() instanceof java.net.SocketTimeoutException) && retryCount < 3) {
                 System.out.printf("[WARN] Socket timeout detected, retrying joinGroup (retryCount=%d)...\n", retryCount);
+                
+                // 📊 指标埋点: JoinGroup重试
+                metricsCollector.incrementCounter("coordinator.join_group.retry", labels);
+                
                 joinGroupWithRetry(retryCount + 1);
                 return;
             }
@@ -331,10 +359,17 @@ public class ConsumerCoordinator {
         
         heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
         heartbeatExecutor.scheduleAtFixedRate(() -> {
+            long heartbeatStart = System.currentTimeMillis();
+            
+            // 📊 指标埋点: 心跳尝试
+            metricsCollector.incrementCounter("coordinator.heartbeat.attempt");
+            
             try {
                 // 如果正在重新加入组，跳过本次心跳
                 if (isRejoining) {
                     System.out.printf("[DEBUG] Skipping heartbeat due to rejoin in progress: clientId=%s, groupId=%s\n", clientId, groupId);
+                    // 📊 指标埋点: 心跳跳过
+                    metricsCollector.incrementCounter("coordinator.heartbeat.skipped");
                     return;
                 }
                 
@@ -352,6 +387,12 @@ public class ConsumerCoordinator {
                 
                 if (errorCode == 0) {
                     System.out.printf("[ConsumerCoordinator] Heartbeat success for clientId=%s, groupId=%s\n", clientId, groupId);
+                    
+                    // 📊 指标埋点: 心跳成功
+                    long heartbeatLatency = System.currentTimeMillis() - heartbeatStart;
+                    metricsCollector.incrementCounter("coordinator.heartbeat.success");
+                    metricsCollector.recordLatency("coordinator.heartbeat.latency", heartbeatLatency);
+                    
                     // 新增：定期检测组成员变化
                     // heartbeatCounter++;
                     // if (heartbeatCounter >= MEMBERSHIP_CHECK_INTERVAL) {
@@ -361,14 +402,28 @@ public class ConsumerCoordinator {
                     // }
                 } else if (errorCode == 25 || errorCode == 27) { // REBALANCE_IN_PROGRESS
                     System.out.printf("[ConsumerCoordinator] Rebalance in progress detected (errorCode=%d)! clientId=%s, groupId=%s, will rejoin group\n", errorCode, clientId, groupId);
+                    
+                    // 📊 指标埋点: 心跳触发重平衡
+                    metricsCollector.incrementCounter("coordinator.heartbeat.rebalance_triggered");
+                    
                     // 重新加入组
                     rejoinGroup();
                 } else if (errorCode == 22) { // ILLEGAL_GENERATION
                     System.err.printf("[ConsumerCoordinator] Illegal generation detected! clientId=%s, groupId=%s, will rejoin group\n", clientId, groupId);
+                    
+                    // 📊 指标埋点: 心跳检测到非法世代
+                    metricsCollector.incrementCounter("coordinator.heartbeat.illegal_generation");
+                    
                     // 重新加入组
                     rejoinGroup();
                 } else {
                     System.err.printf("[ConsumerCoordinator] Heartbeat failed with error: %d for clientId=%s, groupId=%s\n", errorCode, clientId, groupId);
+                    
+                    // 📊 指标埋点: 心跳失败
+                    Map<String, String> errorLabels = new HashMap<>();
+                    errorLabels.put("error_code", String.valueOf(errorCode));
+                    metricsCollector.incrementCounter("coordinator.heartbeat.error", errorLabels);
+                    
                     // 对于其他错误，也尝试重新加入组
                     rejoinGroup();
                 }

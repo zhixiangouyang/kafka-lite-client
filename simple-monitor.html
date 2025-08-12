@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Kafka生产者性能监控</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .metric-card {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 10px;
+            flex: 1;
+            min-width: 200px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        
+        .metric-card h3 {
+            margin-top: 0;
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        .metric-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        
+        .metric-unit {
+            font-size: 0.9em;
+            opacity: 0.7;
+        }
+        
+        .charts-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .chart-card {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .chart-title {
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+            font-weight: bold;
+        }
+        
+        .error-message {
+            background: rgba(255,0,0,0.2);
+            border: 1px solid rgba(255,0,0,0.5);
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .success-message {
+            background: rgba(0,255,0,0.2);
+            border: 1px solid rgba(0,255,0,0.5);
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .refresh-info {
+            text-align: center;
+            margin-top: 20px;
+            opacity: 0.7;
+        }
+        
+        .controls {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .btn {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            margin: 0 10px;
+            font-size: 1em;
+            transition: all 0.3s ease;
+        }
+        
+        .btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        
+        @media (max-width: 768px) {
+            .charts-container {
+                grid-template-columns: 1fr;
+            }
+            
+            .status-bar {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Kafka生产者性能监控</h1>
+            <p>实时监控您的kafka-lite-client生产者性能</p>
+        </div>
+        
+        <div class="controls">
+            <button class="btn" onclick="startMonitoring()">▶️ 开始监控</button>
+            <button class="btn" onclick="stopMonitoring()">⏸️ 暂停监控</button>
+            <button class="btn" onclick="clearCharts()">🗑️ 清空图表</button>
+        </div>
+        
+        <div id="status-message"></div>
+        
+        <div class="status-bar">
+            <div class="metric-card">
+                <h3>🚀 平均QPS</h3>
+                <div class="metric-value" id="avg-qps">-</div>
+                <div class="metric-unit">msg/s</div>
+            </div>
+            
+            <div class="metric-card">
+                <h3>📦 吞吐量</h3>
+                <div class="metric-value" id="throughput">-</div>
+                <div class="metric-unit">MB/s</div>
+            </div>
+            
+            <div class="metric-card">
+                <h3>✅ 成功率</h3>
+                <div class="metric-value" id="success-rate">-</div>
+                <div class="metric-unit">%</div>
+            </div>
+            
+            <div class="metric-card">
+                <h3>⏱️ P99延迟</h3>
+                <div class="metric-value" id="p99-latency">-</div>
+                <div class="metric-unit">ms</div>
+            </div>
+            
+            <div class="metric-card">
+                <h3>📋 队列大小</h3>
+                <div class="metric-value" id="queue-size">-</div>
+                <div class="metric-unit">条</div>
+            </div>
+            
+            <div class="metric-card">
+                <h3>📈 总消息数</h3>
+                <div class="metric-value" id="total-messages">-</div>
+                <div class="metric-unit">条</div>
+            </div>
+        </div>
+        
+        <div class="charts-container">
+            <div class="chart-card">
+                <div class="chart-title">📊 QPS趋势</div>
+                <canvas id="qpsChart"></canvas>
+            </div>
+            
+            <div class="chart-card">
+                <div class="chart-title">📦 吞吐量趋势</div>
+                <canvas id="throughputChart"></canvas>
+            </div>
+        </div>
+        
+        <div class="refresh-info">
+            <p>⏱️ 自动刷新间隔: 3秒 | 📡 监控端点: http://localhost:8083/metrics</p>
+            <p>💡 提示: 请确保您的KafkaProducerMonitorTest正在运行</p>
+        </div>
+    </div>
+
+    <script>
+        let monitoringInterval;
+        let isMonitoring = false;
+        
+        // 图表配置
+        const chartConfig = {
+            type: 'line',
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        labels: {
+                            color: 'white'
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: 'white' },
+                        grid: { color: 'rgba(255,255,255,0.1)' }
+                    },
+                    y: {
+                        ticks: { color: 'white' },
+                        grid: { color: 'rgba(255,255,255,0.1)' }
+                    }
+                },
+                animation: {
+                    duration: 750
+                }
+            }
+        };
+        
+        // 创建QPS图表
+        const qpsCtx = document.getElementById('qpsChart').getContext('2d');
+        const qpsChart = new Chart(qpsCtx, {
+            ...chartConfig,
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '平均QPS',
+                    data: [],
+                    borderColor: '#00ff88',
+                    backgroundColor: 'rgba(0,255,136,0.1)',
+                    tension: 0.4
+                }, {
+                    label: '最近QPS',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: 'rgba(255,107,107,0.1)',
+                    tension: 0.4
+                }]
+            }
+        });
+        
+        // 创建吞吐量图表
+        const throughputCtx = document.getElementById('throughputChart').getContext('2d');
+        const throughputChart = new Chart(throughputCtx, {
+            ...chartConfig,
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '吞吐量 (MB/s)',
+                    data: [],
+                    borderColor: '#4ecdc4',
+                    backgroundColor: 'rgba(78,205,196,0.1)',
+                    tension: 0.4
+                }]
+            }
+        });
+        
+        // 获取指标数据
+        async function fetchMetrics() {
+            try {
+                const response = await fetch('http://localhost:8083/metrics');
+                const text = await response.text();
+                return parsePrometheusMetrics(text);
+            } catch (error) {
+                throw new Error(`无法连接到监控端点: ${error.message}`);
+            }
+        }
+        
+        // 解析Prometheus指标
+        function parsePrometheusMetrics(text) {
+            const metrics = {};
+            const lines = text.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('#') || !line.trim()) continue;
+                
+                const match = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*(?:\{[^}]*\})?) (.+)$/);
+                if (match) {
+                    const [, metricName, value] = match;
+                    const cleanName = metricName.split('{')[0];
+                    metrics[cleanName] = parseFloat(value);
+                }
+            }
+            
+            return metrics;
+        }
+        
+        // 更新显示
+        function updateDisplay(metrics) {
+            // 更新数值显示
+            document.getElementById('avg-qps').textContent = 
+                formatNumber(metrics.test_qps_average || 0);
+            
+            document.getElementById('throughput').textContent = 
+                formatNumber(metrics.test_throughput_mbps || 0, 2);
+            
+            document.getElementById('success-rate').textContent = 
+                formatNumber(metrics.test_success_rate_percent || 0, 1);
+            
+            document.getElementById('p99-latency').textContent = 
+                formatNumber(metrics.test_producer_p99_latency || 0, 1);
+            
+            document.getElementById('queue-size').textContent = 
+                formatNumber(metrics.test_queue_size || 0, 0);
+            
+            document.getElementById('total-messages').textContent = 
+                formatNumber(metrics.test_messages_sent_total || 0, 0);
+            
+            // 更新图表
+            const now = new Date().toLocaleTimeString();
+            
+            // QPS图表
+            qpsChart.data.labels.push(now);
+            qpsChart.data.datasets[0].data.push(metrics.test_qps_average || 0);
+            qpsChart.data.datasets[1].data.push(metrics.test_qps_recent || 0);
+            
+            // 保持最近20个数据点
+            if (qpsChart.data.labels.length > 20) {
+                qpsChart.data.labels.shift();
+                qpsChart.data.datasets[0].data.shift();
+                qpsChart.data.datasets[1].data.shift();
+            }
+            qpsChart.update('none');
+            
+            // 吞吐量图表
+            throughputChart.data.labels.push(now);
+            throughputChart.data.datasets[0].data.push(metrics.test_throughput_mbps || 0);
+            
+            if (throughputChart.data.labels.length > 20) {
+                throughputChart.data.labels.shift();
+                throughputChart.data.datasets[0].data.shift();
+            }
+            throughputChart.update('none');
+        }
+        
+        // 格式化数字
+        function formatNumber(num, decimals = 0) {
+            if (num >= 1000000) {
+                return (num / 1000000).toFixed(decimals) + 'M';
+            } else if (num >= 1000) {
+                return (num / 1000).toFixed(decimals) + 'K';
+            } else {
+                return num.toFixed(decimals);
+            }
+        }
+        
+        // 显示状态消息
+        function showMessage(message, type = 'info') {
+            const statusDiv = document.getElementById('status-message');
+            statusDiv.innerHTML = `<div class="${type === 'error' ? 'error-message' : 'success-message'}">${message}</div>`;
+            
+            if (type !== 'error') {
+                setTimeout(() => {
+                    statusDiv.innerHTML = '';
+                }, 3000);
+            }
+        }
+        
+        // 开始监控
+        function startMonitoring() {
+            if (isMonitoring) return;
+            
+            isMonitoring = true;
+            showMessage('🚀 开始监控...', 'success');
+            
+            monitoringInterval = setInterval(async () => {
+                try {
+                    const metrics = await fetchMetrics();
+                    updateDisplay(metrics);
+                    
+                    // 清除错误消息
+                    const statusDiv = document.getElementById('status-message');
+                    if (statusDiv.innerHTML.includes('error-message')) {
+                        statusDiv.innerHTML = '';
+                    }
+                    
+                } catch (error) {
+                    showMessage(`❌ ${error.message}`, 'error');
+                    console.error('监控错误:', error);
+                }
+            }, 3000);
+        }
+        
+        // 停止监控
+        function stopMonitoring() {
+            if (!isMonitoring) return;
+            
+            isMonitoring = false;
+            clearInterval(monitoringInterval);
+            showMessage('⏸️ 监控已暂停', 'info');
+        }
+        
+        // 清空图表
+        function clearCharts() {
+            qpsChart.data.labels = [];
+            qpsChart.data.datasets[0].data = [];
+            qpsChart.data.datasets[1].data = [];
+            qpsChart.update();
+            
+            throughputChart.data.labels = [];
+            throughputChart.data.datasets[0].data = [];
+            throughputChart.update();
+            
+            showMessage('🗑️ 图表已清空', 'info');
+        }
+        
+        // 页面加载时自动开始监控
+        window.addEventListener('load', () => {
+            setTimeout(startMonitoring, 1000);
+        });
+        
+        // 页面卸载时停止监控
+        window.addEventListener('beforeunload', stopMonitoring);
+    </script>
+</body>
+</html> 

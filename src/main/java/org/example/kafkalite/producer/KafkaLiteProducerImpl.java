@@ -110,9 +110,12 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                             remainingWaitTime = lingerMs - (now - batchStartTime);
                         }
 
-                        if (!batch.isEmpty()) {
-                            // 按照topic和partition分组，减少网络请求
-                            Map<String, Map<Integer, List<ProducerRecord>>> topicPartitionBatches = new ConcurrentHashMap<>();
+                                                    if (!batch.isEmpty()) {
+                                // 📊 指标埋点: 记录批次大小
+                                metricsCollector.setGauge(MetricsCollector.METRIC_PRODUCER_BATCH_SIZE, batch.size());
+                                
+                                // 按照topic和partition分组，减少网络请求
+                                Map<String, Map<Integer, List<ProducerRecord>>> topicPartitionBatches = new ConcurrentHashMap<>();
                             
                             for (ProducerRecord record : batch) {
                                 String topic = record.getTopic();
@@ -207,6 +210,11 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         // 移除小批量优化，确保所有消息都能及时发送
         
         long startTime = System.currentTimeMillis();
+        // 📊 指标埋点: 记录分区批次发送尝试
+        Map<String, String> labels = new java.util.HashMap<>();
+        labels.put("topic", topic);
+        labels.put("partition", String.valueOf(partition));
+        metricsCollector.incrementCounter("producer.batch.send.attempt", labels);
         try {
             // 获取分区对应的broker
             Map<Integer, String> partitionToBroker = metadataManager.getPartitionLeaders(topic);
@@ -270,9 +278,23 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 response = connectionPool.sendAndReceive(request);
                 System.out.printf("成功发送 %d 条消息到 topic=%s, partition=%d%n", 
                     batch.size(), topic, partition);
+                
+                // 📊 指标埋点: 批次发送成功
+                metricsCollector.incrementCounter("producer.batch.send.success", labels);
+                for (int i = 0; i < batch.size(); i++) {
+                    metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
+                }
+                
             } catch (Exception e) {
                 System.err.printf("错误: 发送消息失败: topic=%s, partition=%d, 错误: %s%n", 
                     topic, partition, e.getMessage());
+                
+                // 📊 指标埋点: 批次发送失败
+                metricsCollector.incrementCounter("producer.batch.send.error", labels);
+                for (int i = 0; i < batch.size(); i++) {
+                    metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
+                }
+                
                 throw e;
             }
             
@@ -308,10 +330,15 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             }
         } finally {
             long endTime = System.currentTimeMillis();
-            // 记录每条消息的指标
+            long totalLatency = endTime - startTime;
+            
+            // 📊 指标埋点: 记录批次发送延迟
+            metricsCollector.recordLatency("producer.batch.send.latency", totalLatency, labels);
+            
+            // 记录每条消息的平均延迟
+            long avgLatency = batch.isEmpty() ? 0 : totalLatency / batch.size();
             for (int i = 0; i < batch.size(); i++) {
-                metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND);
-                metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SEND, (endTime - startTime) / batch.size());
+                metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SEND, avgLatency);
             }
         }
     }
@@ -380,6 +407,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             throw new IllegalStateException("Cannot send after the producer is closed");
         }
 
+        long startTime = System.currentTimeMillis();
         try {
             // 添加背压机制：如果队列已满超过90%，等待一段时间
             while (recordQueue.size() > recordQueue.remainingCapacity() * 9) {
@@ -389,11 +417,23 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             // 使用超时版本的offer，避免无限等待
             if (!recordQueue.offer(record, lingerMs, TimeUnit.MILLISECONDS)) {
                 System.err.println("警告: 发送缓冲区已满，消息被丢弃");
+                // 📊 指标埋点: 队列满错误
+                metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
                 throw new RuntimeException("Send buffer is full");
             }
+            
+            // 📊 指标埋点: 异步发送成功入队
+            metricsCollector.incrementCounter("producer.send.queued");
+            
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            // 📊 指标埋点: 中断错误
+            metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
             throw new RuntimeException("Interrupted while adding record to queue", e);
+        } finally {
+            // 📊 指标埋点: 记录入队延迟
+            long latency = System.currentTimeMillis() - startTime;
+            metricsCollector.recordLatency("producer.send.queue_latency", latency);
         }
     }
 
@@ -403,8 +443,23 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             throw new IllegalStateException("Cannot send after the producer is closed");
         }
 
-        // 直接调用现有的doSend方法进行同步发送
-        doSend(record);
+        long startTime = System.currentTimeMillis();
+        try {
+            // 直接调用现有的doSend方法进行同步发送
+            doSend(record);
+            
+            // 📊 指标埋点: 同步发送成功
+            metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
+            
+        } catch (Exception e) {
+            // 📊 指标埋点: 同步发送失败
+            metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
+            throw e;
+        } finally {
+            // 📊 指标埋点: 记录同步发送总延迟
+            long latency = System.currentTimeMillis() - startTime;
+            metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SEND, latency);
+        }
     }
 
     @Override

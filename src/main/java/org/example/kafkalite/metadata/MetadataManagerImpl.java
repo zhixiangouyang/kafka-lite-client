@@ -1,6 +1,7 @@
 package org.example.kafkalite.metadata;
 
 import org.example.kafkalite.core.KafkaSocketClient;
+import org.example.kafkalite.monitor.MetricsCollector;
 
 import java.nio.ByteBuffer;
 import java.util.*;
@@ -31,6 +32,9 @@ public class MetadataManagerImpl implements MetadataManager {
     
     // 新增：bootstrap servers变化回调
     private Runnable bootstrapServersChangedCallback;
+    
+    // 📊 指标收集器
+    private final MetricsCollector metricsCollector;
 
     public MetadataManagerImpl(List<String> bootstrapServers) {
         this(bootstrapServers, 5); // 默认连接池大小10
@@ -40,6 +44,7 @@ public class MetadataManagerImpl implements MetadataManager {
         this.bootstrapServers = bootstrapServers;
         this.connectionPoolSize = connectionPoolSize;
         this.originalDomain = null;  // 传统模式，不支持动态DNS
+        this.metricsCollector = new MetricsCollector("metadata-manager", "default");
     }
     
     /**
@@ -48,7 +53,8 @@ public class MetadataManagerImpl implements MetadataManager {
     public MetadataManagerImpl(List<String> bootstrapServers, int connectionPoolSize, String originalDomain) {
         this.bootstrapServers = bootstrapServers;
         this.connectionPoolSize = connectionPoolSize;
-        this.originalDomain = originalDomain;  // 保存原始域名，用于重新解析
+        this.originalDomain = originalDomain;
+        this.metricsCollector = new MetricsCollector("metadata-manager", "dns-aware");  // 保存原始域名，用于重新解析
     }
     
     // 新增：初始化连接池
@@ -115,6 +121,15 @@ public class MetadataManagerImpl implements MetadataManager {
      * @param isProducerContext 是否在生产者上下文中
      */
     public void refreshMetadata(String topic, boolean isErrorTriggered, boolean isProducerContext) {
+        long startTime = System.currentTimeMillis();
+        
+        // 📊 指标埋点: 元数据刷新尝试
+        Map<String, String> labels = new HashMap<>();
+        labels.put("topic", topic);
+        labels.put("error_triggered", String.valueOf(isErrorTriggered));
+        labels.put("producer_context", String.valueOf(isProducerContext));
+        metricsCollector.incrementCounter("metadata.refresh.attempt", labels);
+        
         // 🔧 兜底机制：每次refresh都检查DNS变化（主动发现域名指向变更）
         if (originalDomain != null) {
             checkDnsChangesProactively();
@@ -122,6 +137,8 @@ public class MetadataManagerImpl implements MetadataManager {
 
         // 智能刷新检查
         if (!refreshStrategy.shouldRefresh(topic, isErrorTriggered, isProducerContext)) {
+            // 📊 指标埋点: 智能策略跳过
+            metricsCollector.incrementCounter("metadata.refresh.skipped", labels);
             return;
         }
         
@@ -226,16 +243,35 @@ public class MetadataManagerImpl implements MetadataManager {
                 System.out.printf("[MetadataManagerImpl] 更新分区leader: topic=%s, leaders=%s\n", topic, leaders);
                 // 记录成功
                 refreshStrategy.recordSuccess(topic);
+                
+                // 📊 指标埋点: 元数据刷新成功
+                long endTime = System.currentTimeMillis();
+                metricsCollector.incrementCounter(MetricsCollector.METRIC_METADATA_REFRESH, labels);
+                metricsCollector.incrementCounter("metadata.refresh.success", labels);
+                metricsCollector.recordLatency("metadata.refresh.latency", endTime - startTime, labels);
+                
+                // 记录分区数量
+                metricsCollector.setGauge("metadata.partitions.count", leaders.size(), labels);
+                
             } else {
                 System.err.printf("[MetadataManagerImpl] 未找到分区leader: topic=%s\n", topic);
                 // 记录错误
                 refreshStrategy.recordError(topic);
+                
+                // 📊 指标埋点: 元数据解析失败
+                metricsCollector.incrementCounter("metadata.refresh.parse_error", labels);
             }
 
         } catch (Exception e) {
             System.err.printf("[MetadataManagerImpl] 刷新元数据失败: topic=%s, 错误=%s\n", topic, e.getMessage());
             // 记录错误
             refreshStrategy.recordError(topic);
+            
+            // 📊 指标埋点: 元数据刷新失败
+            long endTime = System.currentTimeMillis();
+            metricsCollector.incrementCounter("metadata.refresh.error", labels);
+            metricsCollector.recordLatency("metadata.refresh.error_latency", endTime - startTime, labels);
+            
             throw new RuntimeException("Failed to refresh metadata: " + e.getMessage(), e);
         }
     }
@@ -354,9 +390,18 @@ public class MetadataManagerImpl implements MetadataManager {
      * 每次refresh时都检查，发现域名指向变更时主动切换
      */
     private void checkDnsChangesProactively() {
+        long startTime = System.currentTimeMillis();
+        
+        // 📊 指标埋点: DNS检查尝试
+        metricsCollector.incrementCounter("dns.check.attempt");
+        
         try {
             // 重新解析DNS
             List<String> newBootstrapServers = resolveDomainToIPs(originalDomain);
+            
+            // 📊 指标埋点: DNS解析成功
+            long dnsLatency = System.currentTimeMillis() - startTime;
+            metricsCollector.recordLatency(MetricsCollector.METRIC_DNS_RESOLUTION, dnsLatency);
             
             // 检查是否有变化
             if (!newBootstrapServers.equals(bootstrapServers)) {
@@ -364,6 +409,10 @@ public class MetadataManagerImpl implements MetadataManager {
                 System.out.printf("  当前IP列表: %s\n", bootstrapServers);
                 System.out.printf("  新解析IP列表: %s\n", newBootstrapServers);
                 System.out.println("  触发主动切换...");
+                
+                // 📊 指标埋点: DNS变化检测到
+                metricsCollector.incrementCounter("dns.change.detected");
+                metricsCollector.incrementCounter(MetricsCollector.METRIC_DR_SWITCH);
                 
                 // 更新bootstrap servers
                 this.bootstrapServers = newBootstrapServers;
@@ -379,7 +428,14 @@ public class MetadataManagerImpl implements MetadataManager {
                 notifyBootstrapServersChanged(newBootstrapServers);
                 
                 System.out.printf("[MetadataManagerImpl] ✅ 主动切换完成: %s\n", newBootstrapServers);
+                
+                // 📊 指标埋点: DNS切换成功
+                metricsCollector.incrementCounter("dns.switch.success");
+                
             } else {
+                // 📊 指标埋点: DNS无变化
+                metricsCollector.incrementCounter("dns.check.no_change");
+                
                 // DNS没有变化，可以输出调试信息（但不要太频繁）
                 if (System.currentTimeMillis() % 60000 < 1000) { // 大约每分钟输出一次
                     System.out.printf("[MetadataManagerImpl] 🔍 DNS检查: 无变化 %s\n", bootstrapServers);
@@ -388,6 +444,10 @@ public class MetadataManagerImpl implements MetadataManager {
             
         } catch (Exception e) {
             System.err.printf("[MetadataManagerImpl] 主动DNS检查失败: %s\n", e.getMessage());
+            
+            // 📊 指标埋点: DNS检查失败
+            metricsCollector.incrementCounter("dns.check.error");
+            
             // 不抛出异常，避免影响正常的metadata刷新
         }
     }

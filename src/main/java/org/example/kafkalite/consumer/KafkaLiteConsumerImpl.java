@@ -276,6 +276,10 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         }
         long startTime = System.currentTimeMillis();
         List<ConsumerRecord> allRecords = new ArrayList<>();
+        
+        // 📊 指标埋点: poll调用计数
+        metricsCollector.incrementCounter("consumer.poll.attempt");
+        
         System.out.println("[Poll] 开始拉取消息...");
         List<PartitionAssignment> assignments = coordinator.getAssignments();
         System.out.printf("[Poll] 当前分区分配: %s, coordinator.isStable()=%s, coordinator.isRejoining()=%s\n", 
@@ -332,19 +336,49 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                             System.out.printf("[Poll] 拉取到%d条消息, offset范围: [%d, %d]\n", records.size(), firstOffset, lastOffset);
                             System.out.printf("[DEBUG] poll调用updateOffset: topic=%s, partition=%d, offset=%d\n", topic, partition, lastOffset+1);
                             offsetManager.updateOffset(topic, partition, lastOffset + 1);
+                            
+                            // 📊 指标埋点: 成功拉取消息
+                            Map<String, String> labels = new HashMap<>();
+                            labels.put("topic", topic);
+                            labels.put("partition", String.valueOf(partition));
+                            metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_FETCH_SUCCESS, labels);
+                            
+                            // 记录拉取的消息数量
+                            for (int i = 0; i < records.size(); i++) {
+                                metricsCollector.incrementCounter("consumer.records.fetched");
+                            }
+                            
                         } else {
                             System.out.printf("[Poll] topic=%s, partition=%d, fetched=0%n", topic, partition);
+                            
+                            // 📊 指标埋点: 空拉取
+                            Map<String, String> labels = new HashMap<>();
+                            labels.put("topic", topic);
+                            labels.put("partition", String.valueOf(partition));
+                            metricsCollector.incrementCounter("consumer.fetch.empty", labels);
                         }
                         allRecords.addAll(records);
                         break;
                     } catch (Exception e) {
                         System.err.println("[Poll] 拉取异常: " + e.getMessage());
+                        
+                        // 📊 指标埋点: 拉取失败
+                        Map<String, String> labels = new HashMap<>();
+                        labels.put("topic", topic);
+                        labels.put("partition", String.valueOf(partition));
+                        labels.put("retry_count", String.valueOf(retryCount));
+                        metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_FETCH_ERROR, labels);
+                        
                         retryCount++;
                         if (retryCount >= config.getMaxRetries()) {
                             System.err.println("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries");
                             // 重试失败后刷新元数据 - 错误触发
                             metadataManager.refreshMetadata(topic, true, false);
                             topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
+                            
+                            // 📊 指标埋点: 最终拉取失败
+                            metricsCollector.incrementCounter("consumer.fetch.final_failure", labels);
+                            
                             // 重试失败后抛出异常，而不是静默失败
                             throw new RuntimeException("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries", e);
                         } else {
@@ -364,8 +398,20 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             // 不要重新抛出异常，而是返回空结果，让消费者继续运行
         } finally {
             long endTime = System.currentTimeMillis();
+            long pollLatency = endTime - startTime;
+            
+            // 📊 指标埋点: poll完成统计
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_POLL);
-            metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_POLL, endTime - startTime);
+            metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_POLL, pollLatency);
+            
+            // 记录拉取的消息总数
+            if (!allRecords.isEmpty()) {
+                metricsCollector.setGauge("consumer.poll.records_count", allRecords.size());
+                metricsCollector.incrementCounter("consumer.poll.success");
+            } else {
+                metricsCollector.incrementCounter("consumer.poll.empty");
+            }
+            
             System.out.printf("[Poll] 本次总共拉取消息数: %d\n", allRecords.size());
             System.out.printf("[DEBUG] poll finally, thread=%s, enableAutoCommit=%s\n", Thread.currentThread().getName(), config.isEnableAutoCommit());
             if (config.isEnableAutoCommit()) {
@@ -388,6 +434,14 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         long startTime = System.currentTimeMillis();
         try {
             offsetManager.commitSync(coordinator.getGenerationId(), coordinator.getMemberId());
+            
+            // 📊 指标埋点: 提交成功
+            metricsCollector.incrementCounter("consumer.commit.success");
+            
+        } catch (Exception e) {
+            // 📊 指标埋点: 提交失败
+            metricsCollector.incrementCounter("consumer.commit.error");
+            throw e;
         } finally {
             long endTime = System.currentTimeMillis();
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_COMMIT);

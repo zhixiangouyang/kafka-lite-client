@@ -1,0 +1,46 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# 告警规则文件
+rule_files:
+  - "alert_rules.yml"
+
+# AlertManager配置
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# 抓取配置
+scrape_configs:
+  # Kafka-Lite-Client 集成测试指标抓取
+  - job_name: 'kafka-lite-client'
+    static_configs:
+      - targets: ['host.docker.internal:8081']  # Docker环境下访问宿主机
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    metrics_path: /metrics
+    honor_labels: true
+
+  # Kafka-Lite-Client 生产者性能测试指标抓取
+  - job_name: 'kafka-producer-test'
+    static_configs:
+      - targets: ['host.docker.internal:8083']  # 生产者性能测试端口
+    scrape_interval: 5s    # 更频繁的采集，适合性能测试
+    scrape_timeout: 3s
+    metrics_path: /metrics
+    honor_labels: true
+
+  # Prometheus自监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+
+  # Grafana监控
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    scrape_interval: 30s 

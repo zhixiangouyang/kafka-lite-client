@@ -1,0 +1,88 @@
+groups:
+  - name: kafka-lite-client-alerts
+    rules:
+      # Producer 告警
+      - alert: KafkaLiteProducerHighErrorRate
+        expr: rate(producer_send_error_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          service: kafka-lite-client
+        annotations:
+          summary: "Kafka-Lite Producer error rate too high"
+          description: "Producer error rate is {{ $value }} errors/sec for client {{ $labels.client_id }}"
+
+      - alert: KafkaLiteProducerHighLatency
+        expr: producer_send_latency_p99_milliseconds > 1000
+        for: 3m
+        labels:
+          severity: warning
+          service: kafka-lite-client
+        annotations:
+          summary: "Kafka-Lite Producer P99 latency too high"
+          description: "Producer P99 latency is {{ $value }}ms for client {{ $labels.client_id }}"
+
+      # Consumer 告警
+      - alert: KafkaLiteConsumerHighErrorRate
+        expr: rate(consumer_fetch_error_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          service: kafka-lite-client
+        annotations:
+          summary: "Kafka-Lite Consumer error rate too high"
+          description: "Consumer error rate is {{ $value }} errors/sec for client {{ $labels.client_id }}"
+
+      - alert: KafkaLiteConsumerNoMessages
+        expr: rate(consumer_records_fetched_total[10m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: kafka-lite-client
+        annotations:
+          summary: "Kafka-Lite Consumer not receiving messages"
+          description: "Consumer {{ $labels.client_id }} has not received any messages in the last 10 minutes"
+
+      # DR 切换告警
+      - alert: KafkaLiteFrequentDRSwitches
+        expr: rate(dr_switch_total[30m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: kafka-lite-client
+        annotations:
+          summary: "Kafka-Lite frequent DR switches detected"
+          description: "DR switches occurring at {{ $value }} switches/sec for client {{ $labels.client_id }}"
+
+      # 元数据刷新告警
+      - alert: KafkaLiteMetadataRefreshFailures
+        expr: rate(metadata_refresh_error_total[5m]) > 0.2
+        for: 3m
+        labels:
+          severity: warning
+          service: kafka-lite-client
+        annotations:
+          summary: "Kafka-Lite metadata refresh failures"
+          description: "Metadata refresh failing at {{ $value }} failures/sec for client {{ $labels.client_id }}"
+
+      # 协调器告警
+      - alert: KafkaLiteCoordinatorHeartbeatFailures
+        expr: rate(coordinator_heartbeat_error_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: kafka-lite-client
+        annotations:
+          summary: "Kafka-Lite coordinator heartbeat failures"
+          description: "Coordinator heartbeat failing at {{ $value }} failures/sec for group {{ $labels.group_id }}"
+
+      # 服务可用性告警
+      - alert: KafkaLiteClientDown
+        expr: up{job="kafka-lite-client"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: kafka-lite-client
+        annotations:
+          summary: "Kafka-Lite Client is down"
+          description: "Kafka-Lite Client has been down for more than 1 minute" 
