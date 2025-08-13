@@ -110,12 +110,12 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                             remainingWaitTime = lingerMs - (now - batchStartTime);
                         }
 
-                                                    if (!batch.isEmpty()) {
+                        if (!batch.isEmpty()) {
                                 // 📊 指标埋点: 记录批次大小
                                 metricsCollector.setGauge(MetricsCollector.METRIC_PRODUCER_BATCH_SIZE, batch.size());
                                 
-                                // 按照topic和partition分组，减少网络请求
-                                Map<String, Map<Integer, List<ProducerRecord>>> topicPartitionBatches = new ConcurrentHashMap<>();
+                            // 按照topic和partition分组，减少网络请求
+                            Map<String, Map<Integer, List<ProducerRecord>>> topicPartitionBatches = new ConcurrentHashMap<>();
                             
                             for (ProducerRecord record : batch) {
                                 String topic = record.getTopic();
@@ -445,8 +445,8 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
 
         long startTime = System.currentTimeMillis();
         try {
-            // 直接调用现有的doSend方法进行同步发送
-            doSend(record);
+        // 直接调用现有的doSend方法进行同步发送
+        doSend(record);
             
             // 📊 指标埋点: 同步发送成功
             metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);

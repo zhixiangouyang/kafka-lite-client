@@ -14,7 +14,7 @@ public class MetricsCollector {
     private final ConcurrentMap<String, AtomicLong> counters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, List<Long>> latencies = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> windowStartTimes = new ConcurrentHashMap<>();
-    
+
     // 新增：支持标签的指标存储
     private final ConcurrentMap<MetricKey, AtomicLong> labeledCounters = new ConcurrentHashMap<>();
     private final ConcurrentMap<MetricKey, List<Long>> labeledLatencies = new ConcurrentHashMap<>();

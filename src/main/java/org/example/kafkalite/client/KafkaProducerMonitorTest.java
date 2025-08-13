@@ -195,7 +195,7 @@ public class KafkaProducerMonitorTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
                                 
                                 ProducerRecord record = new ProducerRecord(
-                                    "ouyangTest6", // 使用您指定的topic
+                                    "entrytask-produce-consume-test", // 使用您指定的topic
                                     "key" + localIndex,
                                     messageValue
                                 );

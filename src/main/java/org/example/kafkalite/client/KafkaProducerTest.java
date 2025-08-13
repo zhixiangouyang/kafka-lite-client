@@ -176,7 +176,6 @@ public class KafkaProducerTest {
                                 
                                 ProducerRecord record = new ProducerRecord(
 //                                    "ouyangTest6",
-//                                    "cluster1-test-topic",
 //                                    "broker-test-topic",
 //                                    "cluster-test-topic",
                                     "rebalance-test-topic",
