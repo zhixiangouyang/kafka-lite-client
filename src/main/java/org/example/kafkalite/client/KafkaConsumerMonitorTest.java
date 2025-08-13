@@ -78,7 +78,7 @@ public class KafkaConsumerMonitorTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("entrytask-produce-consume-test"));
+            consumer.subscribe(Arrays.asList("produce-consume-test"));
 
             System.out.println("🚀 开始消费消息...");
             System.out.printf("📍 目标Broker: %s\n", broker);
