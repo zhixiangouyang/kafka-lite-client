@@ -88,6 +88,15 @@ public class PrometheusMetricsServer {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             try {
+                // 处理CORS预检请求
+                if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                    exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+                    exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+                    exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+                    sendResponse(exchange, 200, "");
+                    return;
+                }
+                
                 if (!"GET".equals(exchange.getRequestMethod())) {
                     // 只支持GET请求
                     sendResponse(exchange, 405, "Method Not Allowed");
@@ -100,6 +109,10 @@ public class PrometheusMetricsServer {
                 // 设置响应头
                 exchange.getResponseHeaders().set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
                 exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+                // 添加CORS头，允许浏览器跨域访问
+                exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+                exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+                exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
                 
                 // 发送响应
                 sendResponse(exchange, 200, metricsData);
@@ -129,6 +142,15 @@ public class PrometheusMetricsServer {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             try {
+                // 处理CORS预检请求
+                if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                    exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+                    exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+                    exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+                    sendResponse(exchange, 200, "");
+                    return;
+                }
+                
                 if (!"GET".equals(exchange.getRequestMethod())) {
                     sendResponse(exchange, 405, "Method Not Allowed");
                     return;
@@ -139,6 +161,10 @@ public class PrometheusMetricsServer {
                 
                 // 设置响应头
                 exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                // 添加CORS头，允许浏览器跨域访问
+                exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+                exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+                exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
                 
                 // 发送响应
                 sendResponse(exchange, 200, healthResponse);

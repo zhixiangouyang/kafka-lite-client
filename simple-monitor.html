@@ -188,6 +188,18 @@
             </div>
             
             <div class="metric-card">
+                <h3>📊 P50延迟</h3>
+                <div class="metric-value" id="p50-latency">-</div>
+                <div class="metric-unit">ms</div>
+            </div>
+            
+            <div class="metric-card">
+                <h3>📈 P95延迟</h3>
+                <div class="metric-value" id="p95-latency">-</div>
+                <div class="metric-unit">ms</div>
+            </div>
+            
+            <div class="metric-card">
                 <h3>📋 队列大小</h3>
                 <div class="metric-value" id="queue-size">-</div>
                 <div class="metric-unit">条</div>
@@ -213,8 +225,8 @@
         </div>
         
         <div class="refresh-info">
-            <p>⏱️ 自动刷新间隔: 3秒 | 📡 监控端点: http://localhost:8083/metrics</p>
-            <p>💡 提示: 请确保您的KafkaProducerMonitorTest正在运行</p>
+            <p>⏱️ 自动刷新间隔: <span id="refresh-interval">3</span>秒 | 📡 监控端点: http://localhost:8083/metrics</p>
+            <p id="status-tip">💡 提示: 请确保您的KafkaProducerMonitorTest正在运行</p>
         </div>
     </div>
 
@@ -334,6 +346,12 @@
             document.getElementById('p99-latency').textContent = 
                 formatNumber(metrics.test_producer_p99_latency || 0, 1);
             
+            document.getElementById('p50-latency').textContent = 
+                formatNumber(metrics.test_producer_p50_latency || 0, 1);
+                
+            document.getElementById('p95-latency').textContent = 
+                formatNumber(metrics.test_producer_p95_latency || 0, 1);
+            
             document.getElementById('queue-size').textContent = 
                 formatNumber(metrics.test_queue_size || 0, 0);
             
@@ -348,8 +366,10 @@
             qpsChart.data.datasets[0].data.push(metrics.test_qps_average || 0);
             qpsChart.data.datasets[1].data.push(metrics.test_qps_recent || 0);
             
-            // 保持最近20个数据点
-            if (qpsChart.data.labels.length > 20) {
+            // 根据测试状态调整数据点数量
+            const maxDataPoints = isTestCompleted ? 30 : 15; // 测试完成后保留更多历史数据
+            
+            if (qpsChart.data.labels.length > maxDataPoints) {
                 qpsChart.data.labels.shift();
                 qpsChart.data.datasets[0].data.shift();
                 qpsChart.data.datasets[1].data.shift();
@@ -360,7 +380,7 @@
             throughputChart.data.labels.push(now);
             throughputChart.data.datasets[0].data.push(metrics.test_throughput_mbps || 0);
             
-            if (throughputChart.data.labels.length > 20) {
+            if (throughputChart.data.labels.length > maxDataPoints) {
                 throughputChart.data.labels.shift();
                 throughputChart.data.datasets[0].data.shift();
             }
@@ -390,6 +410,12 @@
             }
         }
         
+        // 检测数据状态
+        let lastTotalMessages = 0;
+        let noUpdateCount = 0;
+        let isTestCompleted = false;
+        let currentRefreshInterval = 3000;
+        
         // 开始监控
         function startMonitoring() {
             if (isMonitoring) return;
@@ -400,6 +426,29 @@
             monitoringInterval = setInterval(async () => {
                 try {
                     const metrics = await fetchMetrics();
+                    
+                    // 检测测试是否完成
+                    const currentTotalMessages = metrics.test_messages_sent_total || 0;
+                    if (currentTotalMessages === lastTotalMessages && currentTotalMessages > 0) {
+                        noUpdateCount++;
+                    } else {
+                        noUpdateCount = 0;
+                        lastTotalMessages = currentTotalMessages;
+                    }
+                    
+                    // 如果连续5次没有数据更新且有数据，认为测试已完成
+                    if (noUpdateCount >= 5 && !isTestCompleted && currentTotalMessages > 0) {
+                        isTestCompleted = true;
+                        showMessage('🏁 测试已完成，降低刷新频率到15秒', 'success');
+                        // 更新状态提示
+                        document.getElementById('status-tip').innerHTML = '✅ 测试已完成，显示最终数据';
+                        // 重启定时器，降低刷新频率到15秒
+                        clearInterval(monitoringInterval);
+                        currentRefreshInterval = 15000;
+                        document.getElementById('refresh-interval').textContent = '15';
+                        monitoringInterval = setInterval(arguments.callee, currentRefreshInterval);
+                    }
+                    
                     updateDisplay(metrics);
                     
                     // 清除错误消息
@@ -412,7 +461,7 @@
                     showMessage(`❌ ${error.message}`, 'error');
                     console.error('监控错误:', error);
                 }
-            }, 3000);
+            }, currentRefreshInterval);
         }
         
         // 停止监控
@@ -422,6 +471,15 @@
             isMonitoring = false;
             clearInterval(monitoringInterval);
             showMessage('⏸️ 监控已暂停', 'info');
+        }
+        
+        // 切换监控状态
+        function toggleMonitoring() {
+            if (isMonitoring) {
+                stopMonitoring();
+            } else {
+                startMonitoring();
+            }
         }
         
         // 清空图表

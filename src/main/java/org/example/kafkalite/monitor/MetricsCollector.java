@@ -70,6 +70,72 @@ public class MetricsCollector {
         }
     }
 
+    // 新增：P50延迟 (中位数)
+    public double getP50Latency(String metric) {
+        return getPercentileLatency(metric, 0.50);
+    }
+    
+    // 新增：P95延迟
+    public double getP95Latency(String metric) {
+        return getPercentileLatency(metric, 0.95);
+    }
+    
+    // 新增：P99.9延迟 (极端延迟)
+    public double getP999Latency(String metric) {
+        return getPercentileLatency(metric, 0.999);
+    }
+    
+    // 新增：通用百分位计算方法
+    public double getPercentileLatency(String metric, double percentile) {
+        List<Long> metricLatencies = latencies.getOrDefault(metric, new ArrayList<>());
+        if (metricLatencies.isEmpty()) {
+            return 0.0;
+        }
+
+        synchronized (metricLatencies) {
+            List<Long> sortedLatencies = new ArrayList<>(metricLatencies);
+            Collections.sort(sortedLatencies);
+            int index = Math.max(0, (int) Math.ceil(sortedLatencies.size() * percentile) - 1);
+            return sortedLatencies.get(index);
+        }
+    }
+    
+    // 新增：平均延迟
+    public double getAverageLatency(String metric) {
+        List<Long> metricLatencies = latencies.getOrDefault(metric, new ArrayList<>());
+        if (metricLatencies.isEmpty()) {
+            return 0.0;
+        }
+        
+        synchronized (metricLatencies) {
+            return metricLatencies.stream().mapToLong(Long::longValue).average().orElse(0.0);
+        }
+    }
+    
+    // 新增：最大延迟
+    public double getMaxLatency(String metric) {
+        List<Long> metricLatencies = latencies.getOrDefault(metric, new ArrayList<>());
+        if (metricLatencies.isEmpty()) {
+            return 0.0;
+        }
+        
+        synchronized (metricLatencies) {
+            return metricLatencies.stream().mapToLong(Long::longValue).max().orElse(0L);
+        }
+    }
+    
+    // 新增：最小延迟
+    public double getMinLatency(String metric) {
+        List<Long> metricLatencies = latencies.getOrDefault(metric, new ArrayList<>());
+        if (metricLatencies.isEmpty()) {
+            return 0.0;
+        }
+        
+        synchronized (metricLatencies) {
+            return metricLatencies.stream().mapToLong(Long::longValue).min().orElse(0L);
+        }
+    }
+
     public void resetMetrics(String metric) {
         counters.remove(metric);
         latencies.remove(metric);
@@ -219,8 +285,8 @@ public class MetricsCollector {
     }
     
     // 辅助方法
-    private double getAverageLatency(String metric) {
-        List<Long> metricLatencies = latencies.getOrDefault(metric, new ArrayList<>());
+    private double getAverageLatency(MetricKey key) {
+        List<Long> metricLatencies = labeledLatencies.getOrDefault(key, new ArrayList<>());
         if (metricLatencies.isEmpty()) {
             return 0.0;
         }
@@ -241,17 +307,6 @@ public class MetricsCollector {
             Collections.sort(sortedLatencies);
             int index = (int) Math.ceil(sortedLatencies.size() * 0.99) - 1;
             return sortedLatencies.get(index);
-        }
-    }
-    
-    private double getAverageLatency(MetricKey key) {
-        List<Long> metricLatencies = labeledLatencies.getOrDefault(key, new ArrayList<>());
-        if (metricLatencies.isEmpty()) {
-            return 0.0;
-        }
-        
-        synchronized (metricLatencies) {
-            return metricLatencies.stream().mapToLong(Long::longValue).average().orElse(0.0);
         }
     }
     

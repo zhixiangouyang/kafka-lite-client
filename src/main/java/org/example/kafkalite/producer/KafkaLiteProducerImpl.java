@@ -520,6 +520,31 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         return metricsCollector.getP99Latency(MetricsCollector.METRIC_PRODUCER_SEND);
     }
     
+    // 新增：扩展延迟指标
+    public double getProducerP50Latency() {
+        return metricsCollector.getP50Latency(MetricsCollector.METRIC_PRODUCER_SEND);
+    }
+    
+    public double getProducerP95Latency() {
+        return metricsCollector.getP95Latency(MetricsCollector.METRIC_PRODUCER_SEND);
+    }
+    
+    public double getProducerP999Latency() {
+        return metricsCollector.getP999Latency(MetricsCollector.METRIC_PRODUCER_SEND);
+    }
+    
+    public double getProducerAvgLatency() {
+        return metricsCollector.getAverageLatency(MetricsCollector.METRIC_PRODUCER_SEND);
+    }
+    
+    public double getProducerMaxLatency() {
+        return metricsCollector.getMaxLatency(MetricsCollector.METRIC_PRODUCER_SEND);
+    }
+    
+    public double getProducerMinLatency() {
+        return metricsCollector.getMinLatency(MetricsCollector.METRIC_PRODUCER_SEND);
+    }
+    
     // 获取当前队列大小
     public int getQueueSize() {
         return recordQueue.size();

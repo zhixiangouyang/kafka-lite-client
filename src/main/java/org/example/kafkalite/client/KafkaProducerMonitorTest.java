@@ -119,7 +119,7 @@ public class KafkaProducerMonitorTest {
                         lastCount = count;
                         lastTime = now;
                         
-                        System.out.printf("📊 [%.1fs] 时间: %.2f秒, 已发送: %d条消息(%.2fMB), 错误: %d条, 平均QPS: %.2f, 最近QPS: %.2f, 吞吐量: %.2fMB/s, 队列大小: %d, 生产者QPS: %.2f, P99延迟: %.2f ms%n", 
+                        System.out.printf("📊 [%.1fs] 时间: %.2f秒, 已发送: %d条消息(%.2fMB), 错误: %d条, 平均QPS: %.2f, 最近QPS: %.2f, 吞吐量: %.2fMB/s, 队列大小: %d%n", 
                             elapsedSeconds,
                             elapsedSeconds, 
                             count,
@@ -128,13 +128,19 @@ public class KafkaProducerMonitorTest {
                             totalQps,
                             recentQps,
                             mbps,
-                            producer.getQueueSize(),
-                            producer.getProducerQPS(),
-                            producer.getProducerP99Latency());
+                            producer.getQueueSize());
                         
-                        // 更新Prometheus指标
-                        updatePrometheusMetrics(count, errors, bytes, totalQps, recentQps, mbps, 
-                                              producer.getQueueSize(), producer.getProducerQPS(), producer.getProducerP99Latency());
+                        // 🎯 扩展延迟分布监控
+                        System.out.printf("    📈 延迟分布: P50=%.1fms | P95=%.1fms | P99=%.1fms | P99.9=%.1fms | 平均=%.1fms | 最大=%.1fms%n",
+                            producer.getProducerP50Latency(),
+                            producer.getProducerP95Latency(), 
+                            producer.getProducerP99Latency(),
+                            producer.getProducerP999Latency(),
+                            producer.getProducerAvgLatency(),
+                            producer.getProducerMaxLatency());
+                        
+                        // 更新Prometheus指标 (包含扩展延迟指标)
+                        updatePrometheusMetrics(count, errors, bytes, totalQps, recentQps, mbps, producer);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -311,11 +317,11 @@ public class KafkaProducerMonitorTest {
     }
     
     /**
-     * 更新Prometheus指标
+     * 更新Prometheus指标 (扩展版)
      */
     private static void updatePrometheusMetrics(long messageCount, long errorCount, long bytesSent,
                                               double totalQps, double recentQps, double mbps,
-                                              int queueSize, double producerQps, double p99Latency) {
+                                              KafkaLiteProducerImpl producer) {
         if (metricsCollector == null) return;
         
         try {
@@ -328,9 +334,17 @@ public class KafkaProducerMonitorTest {
             metricsCollector.setGauge("test.qps.average", totalQps);
             metricsCollector.setGauge("test.qps.recent", recentQps);
             metricsCollector.setGauge("test.throughput.mbps", mbps);
-            metricsCollector.setGauge("test.queue.size", queueSize);
-            metricsCollector.setGauge("test.producer.qps", producerQps);
-            metricsCollector.setGauge("test.producer.p99.latency", p99Latency);
+            metricsCollector.setGauge("test.queue.size", producer.getQueueSize());
+            metricsCollector.setGauge("test.producer.qps", producer.getProducerQPS());
+            
+            // 🎯 扩展延迟指标
+            metricsCollector.setGauge("test.producer.p50.latency", producer.getProducerP50Latency());
+            metricsCollector.setGauge("test.producer.p95.latency", producer.getProducerP95Latency());
+            metricsCollector.setGauge("test.producer.p99.latency", producer.getProducerP99Latency());
+            metricsCollector.setGauge("test.producer.p999.latency", producer.getProducerP999Latency());
+            metricsCollector.setGauge("test.producer.avg.latency", producer.getProducerAvgLatency());
+            metricsCollector.setGauge("test.producer.max.latency", producer.getProducerMaxLatency());
+            metricsCollector.setGauge("test.producer.min.latency", producer.getProducerMinLatency());
             
             // 计算派生指标
             double errorRate = messageCount > 0 ? (errorCount * 100.0) / messageCount : 0;
