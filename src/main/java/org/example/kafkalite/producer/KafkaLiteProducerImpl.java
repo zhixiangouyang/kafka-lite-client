@@ -30,6 +30,68 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private final int senderThreads;
     private final String compressionType;
     private final int poolSize;
+    
+    // 新增：分区级缓存机制
+    private final ConcurrentMap<String, PartitionBatchCache> partitionCaches = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService cacheFlushExecutor;
+    
+    // 分区批次缓存
+    private static class PartitionBatchCache {
+        private final String topicPartitionKey;
+        private final List<ProducerRecord> cachedRecords = new ArrayList<>();
+        private volatile long firstMessageTime = 0;
+        private final Object lock = new Object();
+        
+        public PartitionBatchCache(String topicPartitionKey) {
+            this.topicPartitionKey = topicPartitionKey;
+        }
+        
+        // 添加消息到缓存，返回是否达到发送条件
+        public List<ProducerRecord> addAndCheckFlush(List<ProducerRecord> newRecords, int batchSize, long lingerMs) {
+            synchronized (lock) {
+                if (cachedRecords.isEmpty()) {
+                    firstMessageTime = System.currentTimeMillis();
+                }
+                
+                cachedRecords.addAll(newRecords);
+                
+                // 检查是否需要立即发送
+                boolean shouldFlush = cachedRecords.size() >= batchSize || 
+                                    (System.currentTimeMillis() - firstMessageTime >= lingerMs);
+                
+                if (shouldFlush) {
+                    List<ProducerRecord> toSend = new ArrayList<>(cachedRecords);
+                    cachedRecords.clear();
+                    firstMessageTime = 0;
+                    return toSend;
+                }
+                
+                return null; // 不需要发送
+            }
+        }
+        
+        // 强制刷新缓存
+        public List<ProducerRecord> forceFlush() {
+            synchronized (lock) {
+                if (cachedRecords.isEmpty()) {
+                    return null;
+                }
+                
+                List<ProducerRecord> toSend = new ArrayList<>(cachedRecords);
+                cachedRecords.clear();
+                firstMessageTime = 0;
+                return toSend;
+            }
+        }
+        
+        // 检查是否超时需要刷新
+        public boolean shouldTimeoutFlush(long lingerMs) {
+            synchronized (lock) {
+                return !cachedRecords.isEmpty() && 
+                       (System.currentTimeMillis() - firstMessageTime >= lingerMs);
+            }
+        }
+    }
 
     public KafkaLiteProducerImpl(List<String> bootstrapServers, Partitioner partitioner, ProducerConfig config) {
         this.partitioner = partitioner;
@@ -44,7 +106,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         this.poolSize = config.getConnectionPoolSize();
         
         // 使用更多线程发送消息，提高并行度
-//        this.senderThreads = 1;
+//        this.senderThreads = 18;
         this.senderThreads = Math.max(50, Runtime.getRuntime().availableProcessors() * 4);
         this.senderThreadPool = Executors.newFixedThreadPool(senderThreads,
             new ThreadFactory() {
@@ -57,6 +119,16 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 }
             });
 
+        // 初始化缓存刷新线程池
+        this.cacheFlushExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "partition-cache-flush");
+            t.setDaemon(true);
+            return t;
+        });
+        
+        // 启动定期刷新缓存的任务
+        startCacheFlushTask();
+        
         System.out.printf("初始化生产者: 发送线程数=%d, 批次大小=%d, 等待时间=%dms%n", 
             senderThreads, batchSize, lingerMs);
         
@@ -79,6 +151,43 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             
         // 启动发送线程
         startSenderThreads();
+    }
+    
+    // 启动定期刷新缓存的任务
+    private void startCacheFlushTask() {
+        cacheFlushExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                // 定期检查所有分区缓存，刷新超时的缓存
+                for (Map.Entry<String, PartitionBatchCache> entry : partitionCaches.entrySet()) {
+                    String topicPartitionKey = entry.getKey();
+                    PartitionBatchCache cache = entry.getValue();
+                    
+                    if (cache.shouldTimeoutFlush(lingerMs)) {
+                        List<ProducerRecord> toFlush = cache.forceFlush();
+                        if (toFlush != null && !toFlush.isEmpty()) {
+                            // 解析topic和partition
+                            String[] parts = topicPartitionKey.split("-");
+                            if (parts.length == 2) {
+                                String topic = parts[0];
+                                int partition = Integer.parseInt(parts[1]);
+                                
+                                // 异步发送，避免阻塞缓存刷新线程
+                                senderThreadPool.submit(() -> {
+                                    try {
+                                        doSendPartitionBatch(topic, partition, toFlush);
+                                    } catch (Exception e) {
+                                        System.err.printf("缓存刷新发送失败: topic=%s, partition=%d, 错误=%s%n", 
+                                            topic, partition, e.getMessage());
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("缓存刷新任务异常: " + e.getMessage());
+            }
+        }, lingerMs, lingerMs / 2, TimeUnit.MILLISECONDS); // 每半个linger时间检查一次
     }
 
     private void startSenderThreads() {
@@ -207,7 +316,24 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private void sendPartitionBatch(String topic, int partition, List<ProducerRecord> batch) {
         if (batch.isEmpty()) return;
         
-        // 移除小批量优化，确保所有消息都能及时发送
+        // 新增：使用分区级缓存优化批量发送
+        String topicPartitionKey = topic + "-" + partition;
+        PartitionBatchCache cache = partitionCaches.computeIfAbsent(topicPartitionKey, 
+            k -> new PartitionBatchCache(k));
+        
+        // 尝试将消息添加到缓存，检查是否需要立即发送
+        List<ProducerRecord> toSend = cache.addAndCheckFlush(batch, batchSize, lingerMs);
+        
+        if (toSend != null) {
+            // 达到发送条件，立即发送
+            doSendPartitionBatch(topic, partition, toSend);
+        }
+        // 如果toSend为null，说明消息已缓存，等待后续触发或超时刷新
+    }
+    
+    // 实际执行分区批次发送的方法
+    private void doSendPartitionBatch(String topic, int partition, List<ProducerRecord> batch) {
+        if (batch.isEmpty()) return;
         
         long startTime = System.currentTimeMillis();
         // 📊 指标埋点: 记录分区批次发送尝试
@@ -311,8 +437,8 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                     metadataManager.refreshMetadata(topic, true, true);
                     System.out.printf("重试发送消息 (第%d次): topic=%s, partition=%d%n", 
                         retries + 1, topic, partition);
-                    // 重试发送
-                    sendPartitionBatch(topic, partition, batch);
+                    // 重试时直接发送，跳过缓存机制
+                    doSendPartitionBatch(topic, partition, batch);
                     return; // 如果重试成功，直接返回
                 } catch (InterruptedException ie) {
                     // 处理中断异常
@@ -479,6 +605,34 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     public void close() {
         if (closed.compareAndSet(false, true)) {
             try {
+                // 新增：刷新所有分区缓存中的消息
+                System.out.println("正在刷新分区缓存...");
+                for (Map.Entry<String, PartitionBatchCache> entry : partitionCaches.entrySet()) {
+                    String topicPartitionKey = entry.getKey();
+                    PartitionBatchCache cache = entry.getValue();
+                    
+                    List<ProducerRecord> toFlush = cache.forceFlush();
+                    if (toFlush != null && !toFlush.isEmpty()) {
+                        // 解析topic和partition
+                        String[] parts = topicPartitionKey.split("-");
+                        if (parts.length == 2) {
+                            String topic = parts[0];
+                            int partition = Integer.parseInt(parts[1]);
+                            
+                            System.out.printf("刷新缓存: topic=%s, partition=%d, 消息数=%d%n", 
+                                topic, partition, toFlush.size());
+                            
+                            try {
+                                doSendPartitionBatch(topic, partition, toFlush);
+                            } catch (Exception e) {
+                                System.err.printf("刷新缓存失败: topic=%s, partition=%d, 错误=%s%n", 
+                                    topic, partition, e.getMessage());
+                            }
+                        }
+                    }
+                }
+                partitionCaches.clear();
+                
                 // 等待所有消息发送完成
                 while (!recordQueue.isEmpty()) {
                     try {
@@ -489,7 +643,19 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                     }
                 }
 
-                // 关闭线程池
+                // 关闭缓存刷新线程池
+                if (cacheFlushExecutor != null) {
+                    cacheFlushExecutor.shutdown();
+                    try {
+                        if (!cacheFlushExecutor.awaitTermination(2000, TimeUnit.MILLISECONDS)) {
+                            cacheFlushExecutor.shutdownNow();
+                        }
+                    } catch (InterruptedException e) {
+                        cacheFlushExecutor.shutdownNow();
+                    }
+                }
+
+                // 关闭发送线程池
                 senderThreadPool.shutdown();
 
                 try {

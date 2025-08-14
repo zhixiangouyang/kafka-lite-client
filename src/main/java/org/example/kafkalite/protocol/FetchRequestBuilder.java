@@ -33,7 +33,7 @@ public class FetchRequestBuilder {
 
         // 2. 请求体
         buf.putInt(-1); //replicaId, -1表示不同消费者
-        buf.putInt(1000);  // maxWaitTime, 最大等待时间ms
+        buf.putInt(100);  // maxWaitTime, 最大等待时间ms
         buf.putInt(1);     // minBytes, 最小返回字节数
 
         // topics array
