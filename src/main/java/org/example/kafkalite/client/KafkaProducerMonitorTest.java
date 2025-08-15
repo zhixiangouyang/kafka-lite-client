@@ -56,8 +56,8 @@ public class KafkaProducerMonitorTest {
 
         // 2. 创建生产者配置 (与原KafkaProducerTest相同)
         ProducerConfig config = new ProducerConfig.Builder()
-            .batchSize(900)  // 增大批次大小到64KB，适应1KB消息
-            .lingerMs(3)       // 1ms等待时间，提高吞吐量
+            .batchSize(920)  // 增大批次大小到64KB，适应1KB消息
+            .lingerMs(2)       // 1ms等待时间，提高吞吐量
             .maxRetries(3)
             .compressionType("gzip")
             .maxQueueSize(500000) // 增大队列大小
@@ -159,7 +159,7 @@ public class KafkaProducerMonitorTest {
             // 4. 持续发送消息 (与原KafkaProducerTest完全相同的逻辑)
             
             // 创建多个发送线程，提高生产速度
-            int producerThreads = 1; // 使用1个线程并行生产消息
+            int producerThreads = 2; // 使用1个线程并行生产消息
             Thread[] producerThreadsArray = new Thread[producerThreads];
             
             for (int t = 0; t < producerThreads; t++) {
@@ -195,7 +195,7 @@ public class KafkaProducerMonitorTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
                                 
                                 ProducerRecord record = new ProducerRecord(
-                                    "produce-consume-test", // 使用您指定的topic
+                                    "produce-consume-test-1", // 使用您指定的topic
                                     "key" + localIndex,
                                     messageValue
                                 );

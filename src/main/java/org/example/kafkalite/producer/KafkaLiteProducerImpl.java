@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.Collections;
 
 public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private final Partitioner partitioner;
@@ -196,108 +197,14 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             final int threadId = i;
             senderThreadPool.submit(() -> {
                 System.out.printf("发送线程 %d 已启动%n", threadId);
-                List<ProducerRecord> batch = new ArrayList<>();
+                
                 while (!closed.get() || !recordQueue.isEmpty()) {
                     try {
-                        // 尝试在lingerMs时间内收集尽可能多的消息
-                        long batchStartTime = System.currentTimeMillis();
-                        long remainingWaitTime = lingerMs;
-                        
-                        // 降低批处理阈值，更快触发发送
-                        int currentBatchSize = Math.max(10, batchSize);
-                        
-                        while (batch.size() < currentBatchSize && remainingWaitTime > 0) {
-                            ProducerRecord record = recordQueue.poll(remainingWaitTime, TimeUnit.MILLISECONDS);
-                            if (record != null) {
-                                batch.add(record);
-                            } else {
-                                break; // 没有更多消息了
-                            }
-                            
-                            // 更新剩余等待时间
-                            long now = System.currentTimeMillis();
-                            remainingWaitTime = lingerMs - (now - batchStartTime);
-                        }
-
-                        if (!batch.isEmpty()) {
-                                // 📊 指标埋点: 记录批次大小
-                                metricsCollector.setGauge(MetricsCollector.METRIC_PRODUCER_BATCH_SIZE, batch.size());
-                                
-                            // 按照topic和partition分组，减少网络请求
-                            Map<String, Map<Integer, List<ProducerRecord>>> topicPartitionBatches = new ConcurrentHashMap<>();
-                            
-                            for (ProducerRecord record : batch) {
-                                String topic = record.getTopic();
-                                // 确保元数据已刷新 - 生产者上下文
-                                if (!topicPartitionBatches.containsKey(topic)) {
-                                    metadataManager.refreshMetadata(topic, false, true);
-                                    topicPartitionBatches.put(topic, new ConcurrentHashMap<>());
-                                }
-                                
-                                // 获取分区
-                                Map<Integer, String> partitionToBroker = metadataManager.getPartitionLeaders(topic);
-                                int partitionCount = partitionToBroker.size();
-                                if (partitionCount == 0) {
-                                    System.err.printf("警告: topic=%s 没有可用分区%n", topic);
-                                    continue; // 跳过没有分区的主题
-                                }
-                                
-                                int partition = partitioner.partition(topic, record.getKey(), partitionCount);
-                                
-                                // 按分区分组
-                                topicPartitionBatches.get(topic)
-                                    .computeIfAbsent(partition, k -> new ArrayList<>())
-                                    .add(record);
-                            }
-                            
-                            // 计算总批次数
-                            int totalBatches = 0;
-                            for (Map<Integer, List<ProducerRecord>> partitionMap : topicPartitionBatches.values()) {
-                                totalBatches += partitionMap.size();
-                            }
-                            
-                            // 如果没有有效批次，直接返回
-                            if (totalBatches == 0) {
-                                continue;
-                            }
-                            
-                            // 并行发送每个分区的批次
-                            CountDownLatch latch = new CountDownLatch(totalBatches);
-                            List<Future<?>> futures = new ArrayList<>(totalBatches);
-                            
-                            for (Map.Entry<String, Map<Integer, List<ProducerRecord>>> topicEntry : topicPartitionBatches.entrySet()) {
-                                String topic = topicEntry.getKey();
-                                for (Map.Entry<Integer, List<ProducerRecord>> partitionEntry : topicEntry.getValue().entrySet()) {
-                                    int partition = partitionEntry.getKey();
-                                    List<ProducerRecord> partitionBatch = partitionEntry.getValue();
-                                    
-                                    // 直接发送，不使用CompletableFuture，避免线程池饥饿
-                                    try {
-                                        sendPartitionBatch(topic, partition, partitionBatch);
-                                    } catch (Exception e) {
-                                        System.err.println("发送分区批次失败: " + e.getMessage());
-                                    } finally {
-                                        latch.countDown();
-                                    }
-                                }
-                            }
-                            
-                            // 等待所有批次发送完成，或者超时
-                            boolean completed = latch.await(lingerMs * 5, TimeUnit.MILLISECONDS);
-                            if (!completed) {
-                                System.err.println("警告: 部分批次发送超时，取消剩余任务");
-                                // 取消未完成的任务
-                                for (Future<?> future : futures) {
-                                    if (!future.isDone()) {
-                                        future.cancel(true);
-                                    }
-                                }
-                            }
-                            
-                            batch.clear();
-                        } else {
-                            // 没有消息可发送，短暂等待
-                            Thread.sleep(1);
+                        // 简化：直接拉取单条消息，立即进入分区缓存
+                        ProducerRecord record = recordQueue.poll(lingerMs, TimeUnit.MILLISECONDS);
+                        if (record != null) {
+                            // 立即处理单条消息，让分区缓存机制决定何时发送
+                            processRecord(record);
                         }
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
@@ -312,17 +219,49 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             });
         }
     }
-
-    private void sendPartitionBatch(String topic, int partition, List<ProducerRecord> batch) {
-        if (batch.isEmpty()) return;
+    
+    // 新增：处理单条消息的方法
+    private void processRecord(ProducerRecord record) {
+        String topic = record.getTopic();
         
-        // 新增：使用分区级缓存优化批量发送
+        try {
+            // 确保元数据已刷新 - 生产者上下文
+            // 先尝试获取分区信息，如果没有则刷新元数据
+            Map<Integer, String> partitionToBroker = metadataManager.getPartitionLeaders(topic);
+            if (partitionToBroker.isEmpty()) {
+                metadataManager.refreshMetadata(topic, false, true);
+                // 刷新后再次获取
+                partitionToBroker = metadataManager.getPartitionLeaders(topic);
+            }
+            
+            // 获取分区
+            int partitionCount = partitionToBroker.size();
+            if (partitionCount == 0) {
+                System.err.printf("警告: topic=%s 没有可用分区%n", topic);
+                return;
+            }
+            
+            int partition = partitioner.partition(topic, record.getKey(), partitionCount);
+            
+            // 直接发送到分区缓存，让缓存机制决定何时发送
+            sendToPartitionCache(topic, partition, record);
+            
+        } catch (Exception e) {
+            System.err.printf("处理消息失败: topic=%s, 错误=%s%n", topic, e.getMessage());
+            // 📊 指标埋点: 消息处理失败
+            metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
+        }
+    }
+    
+    // 新增：发送单条消息到分区缓存的方法
+    private void sendToPartitionCache(String topic, int partition, ProducerRecord record) {
         String topicPartitionKey = topic + "-" + partition;
         PartitionBatchCache cache = partitionCaches.computeIfAbsent(topicPartitionKey, 
             k -> new PartitionBatchCache(k));
         
-        // 尝试将消息添加到缓存，检查是否需要立即发送
-        List<ProducerRecord> toSend = cache.addAndCheckFlush(batch, batchSize, lingerMs);
+        // 添加单条消息到缓存，检查是否需要立即发送
+        List<ProducerRecord> toSend = cache.addAndCheckFlush(
+            Collections.singletonList(record), batchSize, lingerMs);
         
         if (toSend != null) {
             // 达到发送条件，立即发送
@@ -330,6 +269,8 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         }
         // 如果toSend为null，说明消息已缓存，等待后续触发或超时刷新
     }
+
+    // 移除原来的sendPartitionBatch方法，现在所有消息都通过sendToPartitionCache处理
     
     // 实际执行分区批次发送的方法
     private void doSendPartitionBatch(String topic, int partition, List<ProducerRecord> batch) {

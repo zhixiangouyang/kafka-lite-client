@@ -55,7 +55,7 @@ public class KafkaProducerTest {
         // 2. 创建生产者配置
         ProducerConfig config = new ProducerConfig.Builder()
             .batchSize(900)  // 增大批次大小到64KB，适应1KB消息
-            .lingerMs(2)       // 1ms等待时间，提高吞吐量
+            .lingerMs(3)       // 1ms等待时间，提高吞吐量
             .maxRetries(3)
             .compressionType("gzip")
             .maxQueueSize(500000) // 增大队列大小
