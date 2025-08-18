@@ -400,7 +400,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             long endTime = System.currentTimeMillis();
             long pollLatency = endTime - startTime;
             
-            // 📊 指标埋点: poll完成统计
+            // 📊 指标埋点: poll完成统计（只包含拉取时间）
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_POLL);
             metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_POLL, pollLatency);
             
@@ -414,13 +414,14 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             
             System.out.printf("[Poll] 本次总共拉取消息数: %d\n", allRecords.size());
             System.out.printf("[DEBUG] poll finally, thread=%s, enableAutoCommit=%s\n", Thread.currentThread().getName(), config.isEnableAutoCommit());
-            if (config.isEnableAutoCommit()) {
-                System.out.println("[DEBUG] poll finally自动提交offset");
-                commitSync();
-            } else {
-                System.out.println("[DEBUG] poll finally不自动提交offset，需要手动调用commitSync");
-            }
         }
+        
+        // 自动提交移到finally块外面，单独计算延迟
+        if (config.isEnableAutoCommit()) {
+            System.out.println("[DEBUG] poll finally自动提交offset");
+            performAutoCommit();
+        }
+        
         return allRecords;
     }
 
@@ -442,10 +443,6 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             // 📊 指标埋点: 提交失败
             metricsCollector.incrementCounter("consumer.commit.error");
             throw e;
-        } finally {
-            long endTime = System.currentTimeMillis();
-            metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_COMMIT);
-            metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_COMMIT, endTime - startTime);
         }
     }
 
@@ -510,5 +507,24 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
 
     public double getCommitP99Latency() {
         return metricsCollector.getP99Latency(MetricsCollector.METRIC_CONSUMER_COMMIT);
+    }
+    
+    /**
+     * 执行自动提交，单独记录延迟
+     */
+    private void performAutoCommit() {
+        long startTime = System.currentTimeMillis();
+        try {
+            commitSync();
+        } finally {
+            long endTime = System.currentTimeMillis();
+            long commitLatency = endTime - startTime;
+            
+            // 📊 记录自动提交的延迟
+            metricsCollector.incrementCounter("consumer.auto_commit");
+            metricsCollector.recordLatency("consumer.auto_commit", commitLatency);
+            
+            System.out.printf("[AutoCommit] 自动提交延迟: %dms\n", commitLatency);
+        }
     }
 } 

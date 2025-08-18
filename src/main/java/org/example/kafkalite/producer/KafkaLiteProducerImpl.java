@@ -108,7 +108,8 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         
         // 使用更多线程发送消息，提高并行度
 //        this.senderThreads = 18;
-        this.senderThreads = Math.max(50, Runtime.getRuntime().availableProcessors() * 4);
+//        this.senderThreads = Math.max(50, Runtime.getRuntime().availableProcessors() * 4);
+        this.senderThreads = Math.max(1, Runtime.getRuntime().availableProcessors() * 2);
         this.senderThreadPool = Executors.newFixedThreadPool(senderThreads,
             new ThreadFactory() {
                 private final AtomicLong threadCounter = new AtomicLong(0);
