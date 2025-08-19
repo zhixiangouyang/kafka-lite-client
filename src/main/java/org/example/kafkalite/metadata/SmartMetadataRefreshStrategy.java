@@ -11,7 +11,7 @@ public class SmartMetadataRefreshStrategy {
     
     // 不同场景的刷新间隔
     public static final long ERROR_INTERVAL_MS = 5000;       // 出错后：5秒 (快速恢复)
-    public static final long NORMAL_INTERVAL_MS = 60000;     // 正常情况：1分钟 (减少负载)
+    public static final long NORMAL_INTERVAL_MS = 30000;     // 正常情况：1分钟 (减少负载)
     public static final long PRODUCER_INTERVAL_MS = 300000;  // 生产者：5分钟 (最保守)
     public static final long MIN_INTERVAL_MS = 3000;         // 绝对最小：3秒 (防止过度频繁)
     

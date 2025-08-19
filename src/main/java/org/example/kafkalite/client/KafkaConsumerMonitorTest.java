@@ -66,7 +66,7 @@ public class KafkaConsumerMonitorTest {
 
         // 3. 创建消费者实例
         consumer = new KafkaLiteConsumerImpl(
-            "consumer-monitor-test-group",           // 消费者组ID
+            "consumer-monitor-test-group-1",           // 消费者组ID
             Arrays.asList(broker),                   // Kafka集群地址
             config                                   // 配置
         );
@@ -78,7 +78,7 @@ public class KafkaConsumerMonitorTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("produce-consume-test"));
+            consumer.subscribe(Arrays.asList("produce-consume-test-2"));
 
             System.out.println("🚀 开始消费消息...");
             System.out.printf("📍 目标Broker: %s\n", broker);

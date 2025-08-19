@@ -56,7 +56,7 @@ public class KafkaConsumerTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("rebalance-test-topic"));
+            consumer.subscribe(Arrays.asList("rebalance-test-topic-1"));
 //            consumer.subscribe(Arrays.asList("rebalance-test-topic"));
 
             System.out.println("开始消费消息...");

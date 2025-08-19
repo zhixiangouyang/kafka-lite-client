@@ -38,10 +38,10 @@ public class KafkaProducerTest {
     public static void main(String[] args) {
         // 1. 配置 broker 地址
 //        消费者组测试
-        String broker = "10.251.183.199:27462";
+//        String broker = "10.251.183.199:27462";
 
 //        cluster1
-//        String broker = "10.251.176.5:19092";
+        String broker = "10.251.176.5:19092";
 
 //        cluster2
 //        String broker = "10.251.176.130:19092";
@@ -139,7 +139,7 @@ public class KafkaProducerTest {
             // 4. 持续发送消息
             
             // 创建多个发送线程，提高生产速度
-            int producerThreads = 2; // 使用4个线程并行生产消息
+            int producerThreads = 1; // 使用4个线程并行生产消息
             Thread[] producerThreadsArray = new Thread[producerThreads];
             
             for (int t = 0; t < producerThreads; t++) {
@@ -176,9 +176,9 @@ public class KafkaProducerTest {
                                 
                                 ProducerRecord record = new ProducerRecord(
 //                                    "ouyangTest6",
-//                                    "broker-test-topic",
-//                                    "cluster-test-topic",
-                                    "rebalance-test-topic",
+//                                    "broker-test-topic-1",
+                                    "cluster-test-topic",
+//                                    "rebalance-test-topic-1",
                                     "key" + localIndex,
                                     messageValue
                                 );
