@@ -75,7 +75,7 @@ public class KafkaProducerMonitorTest {
         if (args.length > 1) {
             testDurationMs = Long.parseLong(args[1]);
         } else {
-            testDurationMs = 180000; // 默认3分钟
+            testDurationMs = 600000; // 默认3分钟
         }
         
         // 消息大小（字节）

@@ -54,10 +54,10 @@ public class KafkaProducerTest {
 
         // 2. 创建生产者配置
         ProducerConfig config = new ProducerConfig.Builder()
-            .batchSize(900)  // 增大批次大小到64KB，适应1KB消息
-            .lingerMs(3)       // 1ms等待时间，提高吞吐量
+            .batchSize(10)  // 增大批次大小到64KB，适应1KB消息
+            .lingerMs(1)       // 1ms等待时间，提高吞吐量
             .maxRetries(3)
-            .compressionType("gzip")
+//            .compressionType("gzip")
             .maxQueueSize(500000) // 增大队列大小
             .build();
 
@@ -73,7 +73,7 @@ public class KafkaProducerTest {
         if (args.length > 1) {
             testDurationMs = Long.parseLong(args[1]);
         } else {
-            testDurationMs = 180000; // 默认3分钟
+            testDurationMs = 600000; // 默认3分钟
         }
         
         // 消息大小（字节）
@@ -176,7 +176,7 @@ public class KafkaProducerTest {
                                 
                                 ProducerRecord record = new ProducerRecord(
 //                                    "ouyangTest6",
-//                                    "broker-test-topic-1",
+//                                    "broker-test-topic-2",
                                     "cluster-test-topic",
 //                                    "rebalance-test-topic-1",
                                     "key" + localIndex,

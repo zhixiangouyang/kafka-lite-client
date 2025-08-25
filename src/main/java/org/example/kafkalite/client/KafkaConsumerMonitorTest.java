@@ -106,7 +106,6 @@ public class KafkaConsumerMonitorTest {
                         
                         if (!records.isEmpty()) {
                             metricsCollector.incrementCounter("consumer_poll_success");
-                            metricsCollector.setGauge("consumer_batch_size", records.size());
                         }
                     }
                     
@@ -127,11 +126,7 @@ public class KafkaConsumerMonitorTest {
                         
                         totalBytesConsumed.addAndGet(messageBytes);
                         
-                        // 记录监控指标
-                        if (metricsCollector != null) {
-                            metricsCollector.setGauge("consumer_messages_received", records.size());
-                            metricsCollector.setGauge("consumer_bytes_received", messageBytes);
-                        }
+                        // 记录监控指标 - 已删除可能异常的指标
                     }
 
                     // 如果是手动提交，在这里提交
@@ -275,18 +270,7 @@ public class KafkaConsumerMonitorTest {
         if (metricsCollector == null) return;
         
         try {
-            // 基础统计指标
-            metricsCollector.setGauge("consumer_total_messages", count);
-            metricsCollector.setGauge("consumer_total_bytes", bytes);
-            metricsCollector.setGauge("consumer_total_commits", commits);
-            metricsCollector.setGauge("consumer_total_errors", errors);
-            
-            // 性能指标
-            metricsCollector.setGauge("consumer_messages_per_second", totalMPS);
-            metricsCollector.setGauge("consumer_recent_messages_per_second", recentMPS);
-            metricsCollector.setGauge("consumer_throughput_mbps", mbps);
-            
-            // 延迟指标
+            // 延迟指标 - 只保留有效的延迟指标
             double avgPollLatency = metricsCollector.getAverageLatency("consumer_poll_latency_ms");
             double p99PollLatency = metricsCollector.getP99Latency("consumer_poll_latency_ms");
             
@@ -300,10 +284,6 @@ public class KafkaConsumerMonitorTest {
                 metricsCollector.setGauge("consumer_avg_commit_latency_ms", avgCommitLatency);
                 metricsCollector.setGauge("consumer_p99_commit_latency_ms", p99CommitLatency);
             }
-            
-            // 错误率
-            double errorRate = count > 0 ? (errors * 100.0) / count : 0;
-            metricsCollector.setGauge("consumer_error_rate_percent", errorRate);
             
         } catch (Exception e) {
             System.err.printf("更新Prometheus指标失败: %s\n", e.getMessage());

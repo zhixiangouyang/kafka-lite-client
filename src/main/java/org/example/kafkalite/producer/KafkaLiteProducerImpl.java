@@ -157,6 +157,10 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     
     // 启动定期刷新缓存的任务
     private void startCacheFlushTask() {
+        // 确保delay参数不为0，避免scheduleWithFixedDelay异常
+        long initialDelay = Math.max(1, lingerMs);
+        long delay = Math.max(1, lingerMs / 2);
+        
         cacheFlushExecutor.scheduleWithFixedDelay(() -> {
             try {
                 // 定期检查所有分区缓存，刷新超时的缓存
@@ -189,7 +193,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             } catch (Exception e) {
                 System.err.println("缓存刷新任务异常: " + e.getMessage());
             }
-        }, lingerMs, lingerMs / 2, TimeUnit.MILLISECONDS); // 每半个linger时间检查一次
+        }, initialDelay, delay, TimeUnit.MILLISECONDS); // 每半个linger时间检查一次
     }
 
     private void startSenderThreads() {

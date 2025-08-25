@@ -81,7 +81,7 @@ public class ConsumerBrokerSwitchTest {
         try {
             // 4. 订阅主题
 //            consumer.subscribe(Arrays.asList("cluster1-test-topic"));
-            consumer.subscribe(Arrays.asList("broker-test-topic-1"));
+            consumer.subscribe(Arrays.asList("broker-test-topic-2"));
 
             System.out.println("开始消费消息...");
             System.out.println("现在可以手动停止broker来测试切换:");
