@@ -115,12 +115,30 @@ public class MetadataManagerImpl implements MetadataManager {
     }
     
     /**
+     * 🔧 新增：强制刷新元数据，绕过智能策略（用于集群切换）
+     */
+    public void forceRefreshMetadata(String topic) {
+        refreshMetadata(topic, true, false, true); // 强制刷新
+    }
+    
+    /**
      * 刷新元数据（增强版本）
      * @param topic 主题名称
      * @param isErrorTriggered 是否由错误触发
      * @param isProducerContext 是否在生产者上下文中
      */
     public void refreshMetadata(String topic, boolean isErrorTriggered, boolean isProducerContext) {
+        refreshMetadata(topic, isErrorTriggered, isProducerContext, false);
+    }
+    
+    /**
+     * 刷新元数据（完整版本）
+     * @param topic 主题名称
+     * @param isErrorTriggered 是否由错误触发
+     * @param isProducerContext 是否在生产者上下文中
+     * @param forceRefresh 是否强制刷新，绕过智能策略
+     */
+    public void refreshMetadata(String topic, boolean isErrorTriggered, boolean isProducerContext, boolean forceRefresh) {
         long startTime = System.currentTimeMillis();
         
         // 📊 指标埋点: 元数据刷新尝试
@@ -135,11 +153,15 @@ public class MetadataManagerImpl implements MetadataManager {
             checkDnsChangesProactively();
         }
 
-        // 智能刷新检查
-        if (!refreshStrategy.shouldRefresh(topic, isErrorTriggered, isProducerContext)) {
+        // 智能刷新检查（除非强制刷新）
+        if (!forceRefresh && !refreshStrategy.shouldRefresh(topic, isErrorTriggered, isProducerContext)) {
             // 📊 指标埋点: 智能策略跳过
             metricsCollector.incrementCounter("metadata.refresh.skipped", labels);
             return;
+        }
+        
+        if (forceRefresh) {
+            System.out.printf("[MetadataManagerImpl] 强制刷新元数据: topic=%s\n", topic);
         }
         
         try {
@@ -159,7 +181,9 @@ public class MetadataManagerImpl implements MetadataManager {
             
             // 尝试所有broker，直到找到可用的
             String lastSuccessfulBroker = null;
-            for (String brokerAddress : bootstrapServers) {
+            // 🔧 修复：创建副本避免ConcurrentModificationException
+            List<String> currentBootstrapServers = new ArrayList<>(bootstrapServers);
+            for (String brokerAddress : currentBootstrapServers) {
                 try {
                     System.out.printf("[MetadataManagerImpl] 尝试连接broker: %s (topic=%s)\n", brokerAddress, topic);
                     response = sendRequestWithConnectionPool(brokerAddress, request);
@@ -206,7 +230,8 @@ public class MetadataManagerImpl implements MetadataManager {
                         notifyBootstrapServersChanged(newBootstrapServers);
                         
                         // 用新的IP重试一次
-                        for (String brokerAddress : bootstrapServers) {
+                        List<String> newCurrentBootstrapServers = new ArrayList<>(bootstrapServers);
+                        for (String brokerAddress : newCurrentBootstrapServers) {
                             try {
                                 System.out.printf("[MetadataManagerImpl] 重解析后尝试连接broker: %s (topic=%s)\n", brokerAddress, topic);
                                 response = sendRequestWithConnectionPool(brokerAddress, request);

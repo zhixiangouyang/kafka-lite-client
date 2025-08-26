@@ -31,6 +31,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private final int senderThreads;
     private final String compressionType;
     private final int poolSize;
+    private final short acks;
     
     // 新增：分区级缓存机制
     private final ConcurrentMap<String, PartitionBatchCache> partitionCaches = new ConcurrentHashMap<>();
@@ -48,7 +49,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         }
         
         // 添加消息到缓存，返回是否达到发送条件
-        public List<ProducerRecord> addAndCheckFlush(List<ProducerRecord> newRecords, int batchSize, long lingerMs) {
+        public List<ProducerRecord> addAndCheckFlush(List<ProducerRecord> newRecords, int batchSizeBytes, long lingerMs) {
             synchronized (lock) {
                 if (cachedRecords.isEmpty()) {
                     firstMessageTime = System.currentTimeMillis();
@@ -56,8 +57,17 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 
                 cachedRecords.addAll(newRecords);
                 
-                // 检查是否需要立即发送
-                boolean shouldFlush = cachedRecords.size() >= batchSize || 
+                // 计算当前批次的字节大小
+                int currentBatchBytes = 0;
+                for (ProducerRecord record : cachedRecords) {
+                    // 估算消息大小：key + value + 头部开销
+                    int keySize = record.getKey() != null ? record.getKey().getBytes().length : 0;
+                    int valueSize = record.getValue() != null ? record.getValue().getBytes().length : 0;
+                    currentBatchBytes += keySize + valueSize + 32; // 32字节头部开销估算
+                }
+                
+                // 检查是否需要立即发送：字节数超过限制 或 时间超过限制
+                boolean shouldFlush = currentBatchBytes >= batchSizeBytes || 
                                     (System.currentTimeMillis() - firstMessageTime >= lingerMs);
                 
                 if (shouldFlush) {
@@ -105,6 +115,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         this.recordQueue = new LinkedBlockingQueue<>(config.getMaxQueueSize());
         this.compressionType = config.getCompressionType();
         this.poolSize = config.getConnectionPoolSize();
+        this.acks = config.getAcks();
         
         // 使用更多线程发送消息，提高并行度
 //        this.senderThreads = 18;
@@ -335,7 +346,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                         topic,
                         partition,
                         recordBatch,
-                        (short) 1,  //acks
+                        acks,  // 使用配置的acks参数
                         3000,
                         1
                 );
@@ -407,17 +418,28 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             // 📊 指标埋点: 记录批次发送延迟
             metricsCollector.recordLatency("producer.batch.send.latency", totalLatency, labels);
             
-            // 记录每条消息的平均延迟
-            long avgLatency = batch.isEmpty() ? 0 : totalLatency / batch.size();
-            for (int i = 0; i < batch.size(); i++) {
-                metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SEND, avgLatency);
+            // 🔧 修正：分别统计两种延迟
+            for (ProducerRecord record : batch) {
+                // 1. 真实端到端延迟：从消息创建到响应接收（包含队列等待时间）
+                if (record.getSendTimestamp() > 0) {
+                    long endToEndLatency = endTime - record.getSendTimestamp();
+                    metricsCollector.recordLatency("producer.end_to_end.latency", endToEndLatency);
+                }
+                
+                // 2. 网络发送延迟：从开始发送到响应接收（不包含队列等待）
+                metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SEND, totalLatency);
             }
         }
     }
     
     private ByteBuffer buildRecordBatch(List<ProducerRecord> records) {
-        // 使用优化版批量编码功能，适合处理1KB大小的消息
-        return KafkaRecordEncoder.encodeBatchMessagesOptimized(records, compressionType);
+        // 暂时使用无压缩的批量编码，避免编码问题
+        if ("none".equals(compressionType) || compressionType == null) {
+            return KafkaRecordEncoder.encodeBatchMessagesOptimized(records);
+        } else {
+            // 压缩版本（修复后）
+            return KafkaRecordEncoder.encodeBatchMessagesOptimized(records, compressionType);
+        }
     }
 
     private void doSend(ProducerRecord record) throws Exception {
@@ -464,7 +486,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 topic,
                 partition,
                 recordBatch,
-                (short) 1,  //acks
+                acks,  // 使用配置的acks参数
                 3000,
                 1
         );

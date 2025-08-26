@@ -7,6 +7,7 @@ public class ProducerConfig {
     private final long retryBackoffMs;  // 重试间隔，默认100ms
     private final int maxQueueSize;     // 发送队列大小，默认10000
     private final int connectionPoolSize; // 连接池大小，默认60
+    private final short acks;           // ACK确认策略，默认1
     private String compressionType = "none";
 
     private ProducerConfig(Builder builder) {
@@ -17,6 +18,7 @@ public class ProducerConfig {
         this.maxQueueSize = builder.maxQueueSize;
         this.compressionType = builder.compressionType;
         this.connectionPoolSize = builder.connectionPoolSize;
+        this.acks = builder.acks;
     }
 
     public int getBatchSize() {
@@ -43,6 +45,10 @@ public class ProducerConfig {
         return connectionPoolSize;
     }
 
+    public short getAcks() {
+        return acks;
+    }
+
     public String getCompressionType() {
         return compressionType;
     }
@@ -55,6 +61,7 @@ public class ProducerConfig {
         private int maxQueueSize = 10000;
         private String compressionType = "none";
         private int connectionPoolSize = 60; // 新增，默认60
+        private short acks = 1; // 新增：acks配置，默认为1
 
         public Builder batchSize(int batchSize) {
             this.batchSize = batchSize;
@@ -88,6 +95,11 @@ public class ProducerConfig {
 
         public Builder connectionPoolSize(int connectionPoolSize) {
             this.connectionPoolSize = connectionPoolSize;
+            return this;
+        }
+
+        public Builder acks(short acks) {
+            this.acks = acks;
             return this;
         }
 

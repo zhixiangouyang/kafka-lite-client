@@ -33,6 +33,19 @@ public class OffsetManager {
     public void setCoordinatorSocket(KafkaSingleSocketClient socket) {
         this.coordinatorSocket = socket;
     }
+    
+    // 🔧 新增：更新bootstrap servers，用于集群切换
+    public synchronized void updateBootstrapServers(List<String> newBootstrapServers) {
+        System.out.printf("[OffsetManager] 更新bootstrap servers: %s -> %s\n", 
+            this.bootstrapServers, newBootstrapServers);
+        
+        this.bootstrapServers.clear();
+        this.bootstrapServers.addAll(newBootstrapServers);
+        
+        // 清空本地offset缓存，强制重新从新集群获取
+        System.out.println("[OffsetManager] 清空本地offset缓存，准备从新集群重新获取");
+        this.offsets.clear();
+    }
 
     // 获取当前offset - 修复重复消费问题
     public synchronized long getOffset(String topic, int partition) {

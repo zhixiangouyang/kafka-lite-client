@@ -56,7 +56,7 @@ public class DomainSupportTest {
             consumer = new KafkaLiteConsumerImpl(groupId, kafkaDomain, config);
             
             // 订阅主题
-            consumer.subscribe(Arrays.asList("cluster-test-topic"));
+            consumer.subscribe(Arrays.asList("cluster-test-topic-2"));
             
             System.out.println("\n=== 开始持续消费（演示自动DR切换） ===");
             System.out.println("🎯 新功能: 双重DNS检查机制");
@@ -81,12 +81,12 @@ public class DomainSupportTest {
                     pollFailureCount = 0; // 重置失败计数
                     
                     // 打印消费到的消息
-                    for (ConsumerRecord record : records) {
-                        System.out.printf("✅ 收到消息: topic=%s, partition=%d\n",
-                            record.getTopic(),
-                            record.getPartition()
-                        );
-                    }
+//                    for (ConsumerRecord record : records) {
+//                        System.out.printf("✅ 收到消息: topic=%s, partition=%d\n",
+//                            record.getTopic(),
+//                            record.getPartition()
+//                        );
+//                    }
 
                     // 每15秒输出一次状态
                     long currentTime = System.currentTimeMillis();

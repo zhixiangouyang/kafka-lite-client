@@ -53,7 +53,7 @@ public class KafkaConsumerMonitorTest {
         }));
 
         // 1. 配置 broker 地址
-        String broker = "10.251.183.199:27462";
+        String broker = "10.251.176.5:19092";
 
         // 2. 创建消费者配置
         ConsumerConfig config = new ConsumerConfig();
@@ -78,7 +78,7 @@ public class KafkaConsumerMonitorTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("produce-consume-test-2"));
+            consumer.subscribe(Arrays.asList("produce-test-topic"));
 
             System.out.println("🚀 开始消费消息...");
             System.out.printf("📍 目标Broker: %s\n", broker);

@@ -132,48 +132,111 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
     
     /**
      * 处理bootstrap servers变化（DNS重解析后）
-     * 更新所有相关组件的连接
+     * 更新所有相关组件的连接，重新加入消费者组，重新获取offset
      */
     private void handleBootstrapServersChanged() {
         try {
-            System.out.println("[KafkaLiteConsumerImpl] 开始处理bootstrap servers变化...");
+            System.out.println("=== [集群切换] 开始处理bootstrap servers变化 ===");
             
             // 1. 获取新的bootstrap servers
             List<String> newBootstrapServers = ((MetadataManagerImpl) metadataManager).getBootstrapServers();
-            System.out.printf("[KafkaLiteConsumerImpl] 新的bootstrap servers: %s\n", newBootstrapServers);
+            System.out.printf("[集群切换] 新的bootstrap servers: %s\n", newBootstrapServers);
             
             // 2. 更新本地bootstrap servers
             this.bootstrapServers = newBootstrapServers;
             
             // 3. 清空partition leader缓存，强制重新获取
             topicPartitionLeaders.clear();
-            System.out.println("[KafkaLiteConsumerImpl] 已清空partition leader缓存");
+            System.out.println("[集群切换] 已清空partition leader缓存");
             
-            // 4. TODO: 通知ConsumerCoordinator更新bootstrap servers  
-            // coordinator.updateBootstrapServers(newBootstrapServers); // 需要实现此方法
+            // 🔧 4. 更新ConsumerCoordinator的bootstrap servers
+            System.out.println("[集群切换] 更新ConsumerCoordinator的bootstrap servers...");
+            coordinator.updateBootstrapServers(newBootstrapServers);
             
-            // 5. TODO: 通知OffsetManager更新bootstrap servers
-            // offsetManager.updateBootstrapServers(newBootstrapServers); // 需要实现此方法
+            // 🔧 5. 更新OffsetManager的bootstrap servers（这会清空本地offset缓存）
+            System.out.println("[集群切换] 更新OffsetManager的bootstrap servers...");
+            offsetManager.updateBootstrapServers(newBootstrapServers);
             
-            // 临时解决：重新创建coordinator连接（在下次重连时会使用新的bootstrap servers）
-            System.out.println("[KafkaLiteConsumerImpl] 注意：coordinator和offsetManager将在下次操作时自动使用新的bootstrap servers");
+            // 6. 先刷新所有topic的metadata，获取新集群的partition leader信息
+            System.out.println("[集群切换] 刷新topic metadata...");
+            Map<String, List<Integer>> topicPartitions = new HashMap<>();
             
-            // 6. 触发metadata刷新，获取新的partition leader信息
-            for (String topic : subscribedTopics) {
-                try {
-                    metadataManager.refreshMetadata(topic, true, false); // error-triggered refresh
-                    Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
-                    topicPartitionLeaders.put(topic, leaders);
-                    System.out.printf("[KafkaLiteConsumerImpl] 已更新topic %s 的partition leaders: %s\n", topic, leaders);
-                } catch (Exception e) {
-                    System.err.printf("[KafkaLiteConsumerImpl] 更新topic %s metadata失败: %s\n", topic, e.getMessage());
+            boolean metadataRefreshSuccess = false;
+            int maxRetries = 3;
+            
+            for (int retry = 0; retry < maxRetries && !metadataRefreshSuccess; retry++) {
+                if (retry > 0) {
+                    System.out.printf("[集群切换] 元数据刷新重试 %d/%d\n", retry, maxRetries - 1);
+                    try {
+                        Thread.sleep(2000); // 等待2秒后重试
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+                
+                boolean allTopicsSuccess = true;
+                for (String topic : subscribedTopics) {
+                    try {
+                        // 强制刷新元数据，跳过智能策略
+                        if (metadataManager instanceof MetadataManagerImpl) {
+                            ((MetadataManagerImpl) metadataManager).forceRefreshMetadata(topic);
+                        } else {
+                            metadataManager.refreshMetadata(topic, true, false); // error-triggered refresh
+                        }
+                        Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
+                        
+                        if (leaders != null && !leaders.isEmpty()) {
+                            topicPartitionLeaders.put(topic, leaders);
+                            topicPartitions.put(topic, new ArrayList<>(leaders.keySet()));
+                            System.out.printf("[集群切换] 已更新topic %s 的partition leaders: %s\n", topic, leaders);
+                        } else {
+                            System.err.printf("[集群切换] topic %s 未获取到partition leader信息\n", topic);
+                            allTopicsSuccess = false;
+                        }
+                    } catch (Exception e) {
+                        System.err.printf("[集群切换] 更新topic %s metadata失败: %s\n", topic, e.getMessage());
+                        allTopicsSuccess = false;
+                    }
+                }
+                
+                if (allTopicsSuccess) {
+                    metadataRefreshSuccess = true;
+                } else {
+                    System.err.printf("[集群切换] 元数据刷新未完全成功，重试...\n");
                 }
             }
             
-            System.out.println("[KafkaLiteConsumerImpl] bootstrap servers变化处理完成");
+            if (!metadataRefreshSuccess) {
+                System.err.println("[集群切换] 元数据刷新失败，跳过后续操作");
+                return;
+            }
+            
+            // 🔧 7. 关键修复：触发重新加入消费者组（在元数据更新后）
+            System.out.println("[集群切换] 触发重新加入消费者组...");
+            coordinator.triggerRejoinGroup();
+            
+            // 🔧 8. 等待coordinator稳定
+            waitForCoordinatorStable();
+            
+            // 🔧 9. 关键修复：重新从新集群获取已提交的offset
+            if (!topicPartitions.isEmpty() && coordinator.isStable()) {
+                System.out.println("[集群切换] 重新获取已提交的offset...");
+                try {
+                    offsetManager.fetchCommittedOffsets(subscribedTopics, topicPartitions);
+                    System.out.println("[集群切换] 已重新获取offset信息");
+                } catch (Exception e) {
+                    System.err.printf("[集群切换] 重新获取offset失败: %s\n", e.getMessage());
+                }
+            } else {
+                System.err.println("[集群切换] 跳过offset获取：分区信息为空或coordinator未稳定");
+            }
+            
+            System.out.println("=== [集群切换] bootstrap servers变化处理完成 ===");
             
         } catch (Exception e) {
-            System.err.printf("[KafkaLiteConsumerImpl] 处理bootstrap servers变化失败: %s\n", e.getMessage());
+            System.err.printf("[集群切换] 处理bootstrap servers变化失败: %s\n", e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -507,6 +570,37 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
 
     public double getCommitP99Latency() {
         return metricsCollector.getP99Latency(MetricsCollector.METRIC_CONSUMER_COMMIT);
+    }
+    
+    /**
+     * 等待coordinator稳定的辅助方法
+     */
+    private void waitForCoordinatorStable() {
+        int maxWaitTime = 15000; // 增加到15秒超时
+        int waitTime = 0;
+        System.out.println("[KafkaLiteConsumerImpl] 等待coordinator稳定...");
+        
+        while ((!coordinator.isStable() || coordinator.isRejoining()) && waitTime < maxWaitTime) {
+            try {
+                Thread.sleep(200); // 增加检查间隔
+                waitTime += 200;
+                if (waitTime % 2000 == 0) { // 每2秒输出一次进度
+                    System.out.printf("[KafkaLiteConsumerImpl] 等待coordinator稳定中...%d/%dms, isStable=%s, isRejoining=%s\n", 
+                        waitTime, maxWaitTime, coordinator.isStable(), coordinator.isRejoining());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.err.println("[KafkaLiteConsumerImpl] 等待coordinator稳定被中断");
+                break;
+            }
+        }
+        
+        if (coordinator.isStable() && !coordinator.isRejoining()) {
+            System.out.println("[KafkaLiteConsumerImpl] Coordinator已稳定");
+        } else {
+            System.err.printf("[KafkaLiteConsumerImpl] Coordinator等待超时: %dms, isStable=%s, isRejoining=%s\n", 
+                maxWaitTime, coordinator.isStable(), coordinator.isRejoining());
+        }
     }
     
     /**

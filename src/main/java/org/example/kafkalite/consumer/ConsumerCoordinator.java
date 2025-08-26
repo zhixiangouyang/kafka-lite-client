@@ -96,8 +96,47 @@ public class ConsumerCoordinator {
     private void findCoordinator() {
         Exception lastException = null;
         
-        // 尝试所有bootstrap servers找到协调器
-        for (String bootstrapServer : bootstrapServers) {
+        // 🔧 优化：优先使用共享的MetadataManager的连接池（如果可用）
+        if (metadataManager != null) {
+            try {
+                System.out.println("[ConsumerCoordinator] 尝试通过共享MetadataManager查找协调器...");
+                // 先刷新一下元数据，确保连接是最新的
+                metadataManager.refreshMetadata("__consumer_offsets", true, false);
+                
+                // 使用第一个可用的broker来查找coordinator
+                List<String> currentBootstrapServers = new ArrayList<>(bootstrapServers);
+                if (!currentBootstrapServers.isEmpty()) {
+                    String firstBroker = currentBootstrapServers.get(0);
+                    try {
+                        ByteBuffer request = FindCoordinatorRequestBuilder.build(clientId, groupId, 1);
+                        String[] parts = firstBroker.split(":");
+                        String host = parts[0];
+                        int port = Integer.parseInt(parts[1]);
+                        
+                        System.out.printf("[ConsumerCoordinator] 通过MetadataManager尝试从broker %s:%d 查找协调器\n", host, port);
+                        ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, request);
+                        FindCoordinatorResponseParser.CoordinatorInfo info = FindCoordinatorResponseParser.parse(response);
+                        
+                        if (info.getErrorCode() == 0) {
+                            this.coordinatorHost = info.getHost();
+                            this.coordinatorPort = info.getPort();
+                            System.out.printf("[ConsumerCoordinator] ✅ 通过MetadataManager成功找到协调器: %s:%d\n",
+                                this.coordinatorHost, this.coordinatorPort);
+                            return;
+                        }
+                    } catch (Exception e) {
+                        System.out.printf("[ConsumerCoordinator] 通过MetadataManager查找失败，回退到传统方式: %s\n", e.getMessage());
+                    }
+                }
+            } catch (Exception e) {
+                System.out.printf("[ConsumerCoordinator] MetadataManager方式失败，回退到传统方式: %s\n", e.getMessage());
+            }
+        }
+        
+        // 回退到传统方式：尝试所有bootstrap servers找到协调器
+        // 🔧 修复：使用副本避免ConcurrentModificationException
+        List<String> currentBootstrapServers = new ArrayList<>(bootstrapServers);
+        for (String bootstrapServer : currentBootstrapServers) {
         try {
             ByteBuffer request = FindCoordinatorRequestBuilder.build(clientId, groupId, 1);
             String[] parts = bootstrapServer.split(":");
@@ -150,8 +189,9 @@ public class ConsumerCoordinator {
             
             // 如果是重试，先等待一段时间让 Coordinator 处理完之前的请求
             if (retryCount > 0) {
-                int waitTime = 2000; // 固定2秒
-                System.out.printf("[DEBUG] Waiting %d ms before retry...\n", waitTime);
+                // 🔧 对于rebalance in progress，使用递增等待时间
+                int waitTime = Math.min(2000 + (retryCount - 1) * 1000, 10000); // 2秒到10秒递增
+                System.out.printf("[DEBUG] Waiting %d ms before retry (retryCount=%d)...\n", waitTime, retryCount);
                 try {
                     Thread.sleep(waitTime);
                 } catch (InterruptedException ie) {
@@ -167,7 +207,16 @@ public class ConsumerCoordinator {
             System.out.printf("[DEBUG] JoinGroup response received: errorCode=%d, generationId=%d, leaderId=%s, memberId=%s, members=%s\n", 
                 result.getErrorCode(), result.getGenerationId(), result.getLeaderId(), result.getMemberId(), result.getMembers());
             
-            if (result.getErrorCode() != 0) {
+            if (result.getErrorCode() == 25) { // REBALANCE_IN_PROGRESS
+                System.out.printf("[ConsumerCoordinator] Rebalance in progress (retryCount=%d), 等待后重试...\n", retryCount);
+                // 对于rebalance in progress，增加重试次数和等待时间
+                if (retryCount < 10) { // 增加重试次数到10次
+                    joinGroupWithRetry(retryCount + 1);
+                    return;
+                } else {
+                    throw new RuntimeException("Failed to join group after maximum retries: error=" + result.getErrorCode());
+                }
+            } else if (result.getErrorCode() != 0) {
                 throw new RuntimeException("Failed to join group: error=" + result.getErrorCode());
             }
             
@@ -353,6 +402,13 @@ public class ConsumerCoordinator {
     private void startHeartbeat() {
         System.out.printf("[DEBUG] startHeartbeat: clientId=%s, groupId=%s, memberId=%s, generationId=%d\n", 
             clientId, groupId, memberId, generationId);
+        
+        // 🔧 检查是否有有效的member ID和generation ID
+        if (memberId.isEmpty() || generationId < 0) {
+            System.out.printf("[DEBUG] 跳过心跳启动：无效状态 - memberId='%s', generationId=%d\n", memberId, generationId);
+            return;
+        }
+        
         if (heartbeatExecutor != null) {
             heartbeatExecutor.shutdown();
         }
@@ -443,11 +499,29 @@ public class ConsumerCoordinator {
             System.out.println("[ConsumerCoordinator] Already re-joining, skipping...");
             return;
         }
+        // 🔧 临时停止心跳，避免干扰rejoin过程
+        boolean heartbeatWasRunning = (heartbeatExecutor != null && !heartbeatExecutor.isShutdown());
+        
         try {
             isRejoining = true; // 设置标志
             System.out.printf("[DEBUG] rejoinGroup: clientId=%s, groupId=%s, memberId=%s, topics=%s\n", clientId, groupId, memberId, subscribedTopics);
             System.out.println("[ConsumerCoordinator] Rejoining group...");
             groupState = GroupState.REBALANCING;
+            
+            if (heartbeatWasRunning) {
+                System.out.println("[ConsumerCoordinator] 临时停止心跳线程...");
+                if (heartbeatExecutor != null) {
+                    heartbeatExecutor.shutdown();
+                    try {
+                        if (!heartbeatExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                            heartbeatExecutor.shutdownNow();
+                        }
+                    } catch (InterruptedException e) {
+                        heartbeatExecutor.shutdownNow();
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
             
             // 关闭旧的socket连接
             if (coordinatorSocket != null) {
@@ -472,18 +546,46 @@ public class ConsumerCoordinator {
             this.coordinatorSocket = new KafkaSingleSocketClient(coordinatorHost, coordinatorPort);
             System.out.printf("[DEBUG] coordinatorSocket status: %s\n", coordinatorSocket == null ? "null" : "open");
             
+            // 🔧 在集群切换场景下，如果memberId为空，这是正常的新加入流程
+            if (memberId.isEmpty()) {
+                System.out.println("[ConsumerCoordinator] 集群切换场景：以新成员身份加入消费者组");
+            }
+            
             // 重新加入组
             joinGroup();
             // 重新同步组
             syncGroup();
             
             System.out.println("[ConsumerCoordinator] Successfully rejoined group");
+            
+            // 🔧 重新启动心跳线程（在成功加入组后）
+            if (heartbeatWasRunning && !memberId.isEmpty() && generationId >= 0) {
+                System.out.println("[ConsumerCoordinator] Rejoin成功，重新启动心跳线程...");
+                startHeartbeat();
+            } else {
+                System.out.printf("[ConsumerCoordinator] 跳过心跳重启: heartbeatWasRunning=%s, memberId='%s', generationId=%d\n", 
+                    heartbeatWasRunning, memberId, generationId);
+            }
+            
             synchronized (assignmentLock) {
                 assignmentLock.notifyAll();
             }
         } catch (Exception e) {
             System.err.printf("[ERROR] rejoinGroup failed: clientId=%s, groupId=%s, memberId=%s, topics=%s, error=%s\n", clientId, groupId, memberId, subscribedTopics, e.getMessage());
             groupState = GroupState.UNJOINED;
+            
+            // 🔧 只有在有有效状态时才重新启动心跳线程
+            if (heartbeatWasRunning && !memberId.isEmpty() && generationId >= 0) {
+                System.out.println("[ConsumerCoordinator] Rejoin失败，但状态有效，重新启动心跳线程...");
+                try {
+                    startHeartbeat();
+                } catch (Exception heartbeatException) {
+                    System.err.printf("[ERROR] 重新启动心跳失败: %s\n", heartbeatException.getMessage());
+                }
+            } else if (heartbeatWasRunning) {
+                System.out.printf("[ConsumerCoordinator] Rejoin失败且状态无效，跳过心跳重启: memberId='%s', generationId=%d\n", 
+                    memberId, generationId);
+            }
         } finally {
             isRejoining = false; // 重置标志
             System.out.printf("[DEBUG] Rejoin completed, isRejoining=false: clientId=%s, groupId=%s\n", clientId, groupId);
@@ -499,6 +601,25 @@ public class ConsumerCoordinator {
     // 新增：获取当前的coordinatorSocket
     public KafkaSingleSocketClient getCoordinatorSocket() {
         return coordinatorSocket;
+    }
+    
+    // 🔧 新增：更新bootstrap servers，用于集群切换
+    public synchronized void updateBootstrapServers(List<String> newBootstrapServers) {
+        System.out.printf("[ConsumerCoordinator] 更新bootstrap servers: %s -> %s\n", 
+            this.bootstrapServers, newBootstrapServers);
+        
+        this.bootstrapServers.clear();
+        this.bootstrapServers.addAll(newBootstrapServers);
+        
+        // 🔧 关键修复：重置消费者组状态，准备加入新集群
+        System.out.println("[ConsumerCoordinator] 重置消费者组状态，准备加入新集群...");
+        this.memberId = ""; // 重置member ID，让新集群分配新的ID
+        this.generationId = -1; // 重置generation ID
+        this.groupState = GroupState.UNJOINED; // 重置组状态
+        this.assignments.clear(); // 清空分区分配
+        
+        System.out.printf("[ConsumerCoordinator] 状态已重置: memberId='%s', generationId=%d, groupState=%s\n", 
+            this.memberId, this.generationId, this.groupState);
     }
     
     public List<PartitionAssignment> getAssignments() {

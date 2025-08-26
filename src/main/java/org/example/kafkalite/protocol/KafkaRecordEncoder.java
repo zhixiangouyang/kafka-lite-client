@@ -286,7 +286,8 @@ public class KafkaRecordEncoder {
             return encodeRecordBatch(record.getKey(), record.getValue());
         }
         // 1. 组装多条普通消息（magic=0, attributes=0, key, value...）为消息集合
-        ByteBuffer messageSetBuffer = encodeBatchMessagesOptimized(records);
+        // 修复：调用无压缩版本，避免递归调用
+        ByteBuffer messageSetBuffer = encodeBatchMessages(records);
         byte[] messageSet = new byte[messageSetBuffer.remaining()];
         messageSetBuffer.get(messageSet);
         // 2. 压缩消息集合

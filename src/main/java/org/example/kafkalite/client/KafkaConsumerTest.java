@@ -30,7 +30,7 @@ public class KafkaConsumerTest {
 
         // 1. 配置 broker 地址
         // 消费者组测试
-         String broker = "10.251.183.199:27462";
+         String broker = "10.251.176.5:19092";
 
         // broker测试
 //        String broker = "10.251.176.5:19092";
@@ -49,14 +49,14 @@ public class KafkaConsumerTest {
 
         // 3. 创建消费者实例
         consumer = new KafkaLiteConsumerImpl(
-            "rebalance-test-group",                    // 消费者组ID
+            "rebalance-test-group-7",                    // 消费者组ID
             Arrays.asList(broker),           // Kafka集群地址
             config                           // 配置
         );
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("rebalance-test-topic-1"));
+            consumer.subscribe(Arrays.asList("rebalance-test-topic-4"));
 //            consumer.subscribe(Arrays.asList("rebalance-test-topic"));
 
             System.out.println("开始消费消息...");

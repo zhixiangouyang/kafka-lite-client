@@ -45,7 +45,7 @@ public class KafkaProducerMonitorTest {
     
     public static void main(String[] args) {
         // 1. 配置 broker 地址
-        String broker = "10.251.183.199:27462"; // 默认使用您指定的broker
+        String broker = "10.251.176.5:19092"; // 默认使用您指定的broker
         
         if (args.length > 0) {
             broker = args[0];
@@ -56,10 +56,11 @@ public class KafkaProducerMonitorTest {
 
         // 2. 创建生产者配置 (与原KafkaProducerTest相同)
         ProducerConfig config = new ProducerConfig.Builder()
-            .batchSize(920)  // 增大批次大小到64KB，适应1KB消息
-            .lingerMs(2)       // 1ms等待时间，提高吞吐量
+            .batchSize(1024 * 10)  // 增大批次大小到64KB，适应1KB消息
+            .lingerMs(1)       // 1ms等待时间，提高吞吐量
             .maxRetries(3)
-            .compressionType("gzip")
+            .acks((short) -1)
+//            .compressionType("gzip")
             .maxQueueSize(500000) // 增大队列大小
             .build();
 
@@ -152,14 +153,14 @@ public class KafkaProducerMonitorTest {
             System.out.println("🚀 开始生产者性能测试...");
             System.out.printf("📍 目标Broker: %s\n", broker);
             System.out.printf("⏱️  测试时长: %.1f分钟\n", testDurationMs / 60000.0);
-            System.out.printf("📊 监控端点: http://localhost:8083/metrics\n");
-            System.out.printf("💚 健康检查: http://localhost:8083/health\n");
+            System.out.printf("📊 监控端点: http://localhost:8084/metrics\n");
+            System.out.printf("💚 健康检查: http://localhost:8084/health\n");
             System.out.println("================================================================================");
 
             // 4. 持续发送消息 (与原KafkaProducerTest完全相同的逻辑)
             
             // 创建多个发送线程，提高生产速度
-            int producerThreads = 2; // 使用1个线程并行生产消息
+            int producerThreads = 1; // 使用1个线程并行生产消息
             Thread[] producerThreadsArray = new Thread[producerThreads];
             
             for (int t = 0; t < producerThreads; t++) {
@@ -195,7 +196,7 @@ public class KafkaProducerMonitorTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
                                 
                                 ProducerRecord record = new ProducerRecord(
-                                    "produce-consume-test-2", // 使用您指定的topic
+                                    "produce-test-topic", // 使用您指定的topic
                                     "key" + localIndex,
                                     messageValue
                                 );
@@ -268,7 +269,7 @@ public class KafkaProducerMonitorTest {
             
             System.out.println("================================================================================");
             System.out.println("📊 监控数据已保存到Prometheus，可通过以下方式查看:");
-            System.out.println("  • 指标端点: http://localhost:8083/metrics");
+            System.out.println("  • 指标端点: http://localhost:8084/metrics");
             System.out.println("  • 建议配置Grafana进行可视化展示");
             System.out.println("================================================================================");
 
@@ -304,11 +305,11 @@ public class KafkaProducerMonitorTest {
             // 创建指标收集器
             metricsCollector = new MetricsCollector("kafka-producer-test", "test-instance-001");
             
-            // 创建并启动Prometheus服务器 (使用8083端口避免冲突)
-            metricsServer = PrometheusMetricsServer.create(metricsCollector, 8083);
+            // 创建并启动Prometheus服务器 (使用8084端口避免冲突)
+            metricsServer = PrometheusMetricsServer.create(metricsCollector, 8084);
             metricsServer.start();
             
-            System.out.println("✅ Prometheus监控服务器已启动: http://localhost:8083/metrics");
+            System.out.println("✅ Prometheus监控服务器已启动: http://localhost:8084/metrics");
             
         } catch (Exception e) {
             System.err.printf("⚠️ 监控系统初始化失败: %s\n", e.getMessage());
