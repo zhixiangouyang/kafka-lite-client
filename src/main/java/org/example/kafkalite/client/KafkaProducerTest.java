@@ -41,7 +41,8 @@ public class KafkaProducerTest {
 //        String broker = "10.251.183.199:27462";
 
 //        cluster1
-        String broker = "10.251.176.5:19092";
+//        String broker = "10.251.176.5:19092";
+        String broker = "10.251.184.8:19092";
 
 //        cluster2
 //        String broker = "10.251.176.130:19092";

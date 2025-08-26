@@ -218,7 +218,7 @@ public class DomainSupportProducerTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
 
                                 ProducerRecord record = new ProducerRecord(
-                                        "cluster-test-topic-2",
+                                        "cluster-test-topic-4",
                                         "key" + localIndex,
                                         messageValue
                                 );
@@ -371,7 +371,7 @@ public class DomainSupportProducerTest {
                 .maxRetries(3)
                 .acks((short) 1)       // 使用acks=1，平衡性能和可靠性
                 .maxQueueSize(100000)  // 队列大小
-                .connectionPoolSize(5) // 连接池大小
+                .connectionPoolSize(20) // 🔧 增加连接池大小，避免耗尽
                 .build();
     }
 

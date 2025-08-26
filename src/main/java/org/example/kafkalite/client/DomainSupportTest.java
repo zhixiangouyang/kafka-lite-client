@@ -56,7 +56,7 @@ public class DomainSupportTest {
             consumer = new KafkaLiteConsumerImpl(groupId, kafkaDomain, config);
             
             // 订阅主题
-            consumer.subscribe(Arrays.asList("cluster-test-topic-2"));
+            consumer.subscribe(Arrays.asList("cluster-test-topic-4"));
             
             System.out.println("\n=== 开始持续消费（演示自动DR切换） ===");
             System.out.println("🎯 新功能: 双重DNS检查机制");

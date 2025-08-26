@@ -355,30 +355,69 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 throw e;
             }
             
-            // 通过连接池发送
-            ByteBuffer response;
-            try {
-                response = connectionPool.sendAndReceive(request);
-                System.out.printf("成功发送 %d 条消息到 topic=%s, partition=%d%n", 
-                    batch.size(), topic, partition);
-                
-                // 📊 指标埋点: 批次发送成功
-                metricsCollector.incrementCounter("producer.batch.send.success", labels);
-                for (int i = 0; i < batch.size(); i++) {
-                    metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
+            // 🔧 通过连接池发送，添加重试逻辑
+            ByteBuffer response = null;
+            Exception lastException = null;
+            
+            for (int retryCount = 0; retryCount <= maxRetries; retryCount++) {
+                try {
+                    if (retryCount > 0) {
+                        System.out.printf("重试发送: topic=%s, partition=%d, 第%d次重试\n", topic, partition, retryCount);
+                        Thread.sleep(retryBackoffMs);
+                        
+                        // 重试时检查是否需要刷新元数据
+                        metadataManager.refreshMetadata(topic, true, true);
+                        Map<Integer, String> newPartitionToBroker = metadataManager.getPartitionLeaders(topic);
+                        String newBrokerAddress = newPartitionToBroker.get(partition);
+                        
+                        if (newBrokerAddress != null && !newBrokerAddress.equals(brokerAddress)) {
+                            System.out.printf("检测到broker变化: %s -> %s\n", brokerAddress, newBrokerAddress);
+                            brokerAddress = newBrokerAddress;
+                            String[] newParts = brokerAddress.split(":");
+                            String newHost = newParts[0];
+                            int newPort = Integer.parseInt(newParts[1]);
+                            
+                            connectionPool = connectionPools.computeIfAbsent(
+                                brokerAddress, 
+                                k -> new KafkaSocketClient.ConnectionPool(newHost, newPort, this.poolSize)
+                            );
+                        }
+                    }
+                    
+                    response = connectionPool.sendAndReceive(request);
+                    System.out.printf("成功发送 %d 条消息到 topic=%s, partition=%d%s%n", 
+                        batch.size(), topic, partition, retryCount > 0 ? " (重试成功)" : "");
+                    
+                    // 📊 指标埋点: 批次发送成功
+                    metricsCollector.incrementCounter("producer.batch.send.success", labels);
+                    for (int i = 0; i < batch.size(); i++) {
+                        metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
+                    }
+                    
+                    break; // 成功则退出重试循环
+                    
+                } catch (Exception e) {
+                    lastException = e;
+                    System.err.printf("发送失败: topic=%s, partition=%d, 重试=%d/%d, 错误: %s%n", 
+                        topic, partition, retryCount, maxRetries, e.getMessage());
+                    
+                    // 📊 指标埋点: 批次发送重试
+                    labels.put("retry_count", String.valueOf(retryCount));
+                    metricsCollector.incrementCounter("producer.batch.send.retry", labels);
+                    
+                    if (retryCount >= maxRetries) {
+                        System.err.printf("发送最终失败: topic=%s, partition=%d, 已重试%d次%n", 
+                            topic, partition, maxRetries);
+                        
+                        // 📊 指标埋点: 批次发送最终失败
+                        metricsCollector.incrementCounter("producer.batch.send.error", labels);
+                        for (int i = 0; i < batch.size(); i++) {
+                            metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
+                        }
+                        
+                        throw new RuntimeException("发送失败，已重试" + maxRetries + "次", lastException);
+                    }
                 }
-                
-            } catch (Exception e) {
-                System.err.printf("错误: 发送消息失败: topic=%s, partition=%d, 错误: %s%n", 
-                    topic, partition, e.getMessage());
-                
-                // 📊 指标埋点: 批次发送失败
-                metricsCollector.incrementCounter("producer.batch.send.error", labels);
-                for (int i = 0; i < batch.size(); i++) {
-                    metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
-                }
-                
-                throw e;
             }
             
             // 这里可以解析响应，处理错误等
@@ -491,8 +530,34 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 1
         );
 
-        // 7. 通过连接池发送
-        connectionPool.sendAndReceive(request);
+        // 🔧 7. 通过连接池发送，添加重试逻辑
+        Exception lastException = null;
+        for (int retryCount = 0; retryCount <= maxRetries; retryCount++) {
+            try {
+                if (retryCount > 0) {
+                    System.out.printf("重试发送单条消息: topic=%s, partition=%d, 第%d次重试\n", topic, partition, retryCount);
+                    Thread.sleep(retryBackoffMs);
+                    
+                    // 重试时刷新元数据
+                    metadataManager.refreshMetadata(topic, true, true);
+                }
+                
+                connectionPool.sendAndReceive(request);
+                if (retryCount > 0) {
+                    System.out.printf("单条消息重试发送成功: topic=%s, partition=%d\n", topic, partition);
+                }
+                break; // 成功则退出重试循环
+                
+            } catch (Exception e) {
+                lastException = e;
+                System.err.printf("单条消息发送失败: topic=%s, partition=%d, 重试=%d/%d, 错误: %s\n", 
+                    topic, partition, retryCount, maxRetries, e.getMessage());
+                
+                if (retryCount >= maxRetries) {
+                    throw new RuntimeException("单条消息发送失败，已重试" + maxRetries + "次", lastException);
+                }
+            }
+        }
     }
 
     @Override
@@ -682,5 +747,43 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     // 获取当前队列大小
     public int getQueueSize() {
         return recordQueue.size();
+    }
+    
+    /**
+     * 🔧 新增：清理所有连接池，用于解决连接泄漏问题
+     */
+    public void clearAllConnectionPools() {
+        System.out.println("[Producer] 强制清理所有连接池...");
+        
+        int poolCount = connectionPools.size();
+        for (Map.Entry<String, KafkaSocketClient.ConnectionPool> entry : connectionPools.entrySet()) {
+            String broker = entry.getKey();
+            KafkaSocketClient.ConnectionPool pool = entry.getValue();
+            try {
+                pool.close();
+                System.out.printf("[Producer] 已关闭连接池: %s\n", broker);
+            } catch (Exception e) {
+                System.err.printf("[Producer] 关闭连接池失败: %s, 错误: %s\n", broker, e.getMessage());
+            }
+        }
+        connectionPools.clear();
+        
+        // 清理分区缓存
+        partitionCaches.clear();
+        
+        System.out.printf("[Producer] 连接池清理完成，共清理了 %d 个连接池\n", poolCount);
+    }
+    
+    /**
+     * 🔧 新增：获取连接池状态信息，用于调试
+     */
+    public void printConnectionPoolStatus() {
+        System.out.println("=== Producer连接池状态 ===");
+        for (Map.Entry<String, KafkaSocketClient.ConnectionPool> entry : connectionPools.entrySet()) {
+            String broker = entry.getKey();
+            System.out.printf("连接池: %s\n", broker);
+        }
+        System.out.printf("总连接池数: %d\n", connectionPools.size());
+        System.out.println("========================");
     }
 }

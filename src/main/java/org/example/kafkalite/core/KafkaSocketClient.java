@@ -142,14 +142,21 @@ public class KafkaSocketClient {
                 socket = socketPool.poll(100, TimeUnit.MILLISECONDS);
                 
                 if (socket == null) {
-                    // 池中没有可用连接，检查是否可以创建新连接
-                    if (totalConnections.get() < maxPoolSize) {
-                        System.out.printf("池中无可用连接，创建新连接到 %s:%d%n", host, port);
-                        socket = createSocket();
-                        totalConnections.incrementAndGet();
+                    // 🔧 修复竞态条件：原子性地检查和递增连接数
+                    long currentConnections = totalConnections.get();
+                    if (currentConnections < maxPoolSize && totalConnections.compareAndSet(currentConnections, currentConnections + 1)) {
+                        // 成功预留了一个连接槽位
+                        try {
+                            System.out.printf("池中无可用连接，创建新连接到 %s:%d (当前连接数: %d/%d)%n", host, port, currentConnections + 1, maxPoolSize);
+                            socket = createSocket();
+                        } catch (Exception e) {
+                            // 创建失败，回滚连接数
+                            totalConnections.decrementAndGet();
+                            throw e;
+                        }
                     } else {
                         // 已达到最大连接数，等待连接可用
-                        System.out.printf("已达到最大连接数 %d，等待连接可用: %s:%d%n", maxPoolSize, host, port);
+                        System.out.printf("已达到最大连接数 %d，等待连接可用: %s:%d (当前连接数: %d)%n", maxPoolSize, host, port, currentConnections);
                         socket = socketPool.take(); // 阻塞等待
                     }
                 } else if (socket.isClosed() || !socket.isConnected()) {
@@ -157,10 +164,10 @@ public class KafkaSocketClient {
                     System.out.printf("检测到已关闭连接，创建新连接到 %s:%d%n", host, port);
                     try {
                         socket.close();
-                        totalConnections.decrementAndGet();
+                        // 注意：不减少totalConnections，因为我们马上要创建一个新的来替换它
                     } catch (IOException ignored) {}
                     socket = createSocket();
-                    totalConnections.incrementAndGet();
+                    // 不需要incrementAndGet，因为我们只是替换了一个连接
                 }
                 
                 // 创建请求数据的副本，避免修改原始ByteBuffer
@@ -197,10 +204,17 @@ public class KafkaSocketClient {
                 
                 ByteBuffer response = ByteBuffer.wrap(responseBuf);
                 
-                // 将连接放回池中
-                if (returnToPool && !closed.get() && !socket.isClosed()) {
-                    socketPool.offer(socket);
-                    socket = null; // 防止finally中关闭
+                // 🔧 修复：总是尝试将连接放回池中（如果连接有效）
+                if (returnToPool && !closed.get() && socket != null && !socket.isClosed() && socket.isConnected()) {
+                    boolean offered = socketPool.offer(socket);
+                    if (offered) {
+                        socket = null; // 防止finally中关闭
+                        // System.out.printf("[DEBUG] 连接已归还到池: %s:%d, 池大小: %d\n", host, port, socketPool.size());
+                    } else {
+                        System.err.printf("连接池已满，无法归还连接: %s:%d\n", host, port);
+                        // 连接池满了，说明有问题，强制关闭这个连接
+                        returnToPool = false;
+                    }
                 }
                 
                 successfulRequests.incrementAndGet();
@@ -214,12 +228,25 @@ public class KafkaSocketClient {
                 throw new RuntimeException("Interrupted while getting connection", e);
             } catch (IOException e) {
                 System.err.printf("连接IO错误: %s:%d, 错误: %s%n", host, port, e.getMessage());
-                returnToPool = false; // 不要将这个连接返回池中
+                returnToPool = false; // 网络错误，不要将这个连接返回池中
                 failedRequests.incrementAndGet();
                 throw new RuntimeException("IO error with connection: " + e.getMessage(), e);
+            } catch (java.nio.BufferOverflowException e) {
+                System.err.printf("缓冲区溢出: %s:%d, 错误: %s%n", host, port, e.getMessage());
+                // 🔧 BufferOverflowException通常是数据问题，连接可能还是好的
+                // 但为了安全起见，也不归还连接
+                returnToPool = false;
+                failedRequests.incrementAndGet();
+                throw new RuntimeException("Buffer overflow: " + e.getMessage(), e);
             } catch (Exception e) {
                 System.err.printf("连接错误: %s:%d, 错误: %s%n", host, port, e.getMessage());
-                returnToPool = false; // 不要将这个连接返回池中
+                // 🔧 对于未知异常，检查连接状态来决定是否归还
+                if (socket != null && !socket.isClosed() && socket.isConnected()) {
+                    System.out.printf("未知异常但连接仍有效: %s:%d, 尝试归还连接\n", host, port);
+                    // 连接看起来还是好的，可以尝试归还
+                } else {
+                    returnToPool = false;
+                }
                 failedRequests.incrementAndGet();
                 throw new RuntimeException(e);
             } finally {
