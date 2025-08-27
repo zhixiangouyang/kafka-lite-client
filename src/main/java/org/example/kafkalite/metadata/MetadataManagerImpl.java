@@ -6,6 +6,9 @@ import org.example.kafkalite.monitor.MetricsCollector;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public class MetadataManagerImpl implements MetadataManager {
     private volatile List<String> bootstrapServers;  // 改为volatile，支持动态更新
@@ -33,8 +36,12 @@ public class MetadataManagerImpl implements MetadataManager {
     // 新增：bootstrap servers变化回调
     private Runnable bootstrapServersChangedCallback;
     
-    // 📊 指标收集器
+    // 指标收集器
     private final MetricsCollector metricsCollector;
+    
+    // DNS定期检查定时器（频率低，避免影响性能）
+    private ScheduledExecutorService dnsCheckExecutor;
+    private static final long DNS_CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10分钟检查一次
 
     public MetadataManagerImpl(List<String> bootstrapServers) {
         this(bootstrapServers, 5); // 默认连接池大小10
@@ -55,6 +62,11 @@ public class MetadataManagerImpl implements MetadataManager {
         this.connectionPoolSize = connectionPoolSize;
         this.originalDomain = originalDomain;
         this.metricsCollector = new MetricsCollector("metadata-manager", "dns-aware");  // 保存原始域名，用于重新解析
+        
+        // 启动低频DNS检查定时器（仅当有域名时）
+        if (originalDomain != null) {
+            startDnsCheckTimer();
+        }
     }
     
     // 新增：初始化连接池
@@ -115,7 +127,7 @@ public class MetadataManagerImpl implements MetadataManager {
     }
     
     /**
-     * 🔧 新增：强制刷新元数据，绕过智能策略（用于集群切换）
+     * 新增：强制刷新元数据，绕过智能策略（用于集群切换）
      */
     public void forceRefreshMetadata(String topic) {
         refreshMetadata(topic, true, false, true); // 强制刷新
@@ -141,21 +153,22 @@ public class MetadataManagerImpl implements MetadataManager {
     public void refreshMetadata(String topic, boolean isErrorTriggered, boolean isProducerContext, boolean forceRefresh) {
         long startTime = System.currentTimeMillis();
         
-        // 📊 指标埋点: 元数据刷新尝试
+        // 指标埋点: 元数据刷新尝试
         Map<String, String> labels = new HashMap<>();
         labels.put("topic", topic);
         labels.put("error_triggered", String.valueOf(isErrorTriggered));
         labels.put("producer_context", String.valueOf(isProducerContext));
         metricsCollector.incrementCounter("metadata.refresh.attempt", labels);
         
-        // 🔧 兜底机制：每次refresh都检查DNS变化（主动发现域名指向变更）
-        if (originalDomain != null) {
-            checkDnsChangesProactively();
-        }
+        // 注释掉每次refresh都检查DNS的逻辑，避免频繁DNS解析影响性能
+        // 改为依赖连接失败时的被动检测和独立的定时检查
+        // if (originalDomain != null) {
+        //     checkDnsChangesProactively();
+        // }
 
         // 智能刷新检查（除非强制刷新）
         if (!forceRefresh && !refreshStrategy.shouldRefresh(topic, isErrorTriggered, isProducerContext)) {
-            // 📊 指标埋点: 智能策略跳过
+            // 指标埋点: 智能策略跳过
             metricsCollector.incrementCounter("metadata.refresh.skipped", labels);
             return;
         }
@@ -181,7 +194,7 @@ public class MetadataManagerImpl implements MetadataManager {
             
             // 尝试所有broker，直到找到可用的
             String lastSuccessfulBroker = null;
-            // 🔧 修复：创建副本避免ConcurrentModificationException
+            // 修复：创建副本避免ConcurrentModificationException
             List<String> currentBootstrapServers = new ArrayList<>(bootstrapServers);
             for (String brokerAddress : currentBootstrapServers) {
                 try {
@@ -211,8 +224,8 @@ public class MetadataManagerImpl implements MetadataManager {
                     System.out.println("[MetadataManagerImpl] 所有broker都不可用，尝试重新解析DNS...");
                     List<String> newBootstrapServers = resolveDomainToIPs(originalDomain);
                     
-                    // 检查是否获得了新的IP
-                    if (!newBootstrapServers.equals(bootstrapServers)) {
+                    // 检查是否获得了新的IP（忽略顺序变化）
+                    if (areBootstrapServersChanged(bootstrapServers, newBootstrapServers)) {
                         System.out.printf("[MetadataManagerImpl] DNS重解析获得新IP: 旧=%s, 新=%s\n", 
                             bootstrapServers, newBootstrapServers);
                         
@@ -226,7 +239,7 @@ public class MetadataManagerImpl implements MetadataManager {
                         // 重新初始化连接池
                         initializeConnectionPools();
                         
-                        // 🔧 重要：通知所有相关组件更新连接
+                        // 重要：通知所有相关组件更新连接
                         notifyBootstrapServersChanged(newBootstrapServers);
                         
                         // 用新的IP重试一次
@@ -269,7 +282,7 @@ public class MetadataManagerImpl implements MetadataManager {
                 // 记录成功
                 refreshStrategy.recordSuccess(topic);
                 
-                // 📊 指标埋点: 元数据刷新成功
+                // 指标埋点: 元数据刷新成功
                 long endTime = System.currentTimeMillis();
                 metricsCollector.incrementCounter(MetricsCollector.METRIC_METADATA_REFRESH, labels);
                 metricsCollector.incrementCounter("metadata.refresh.success", labels);
@@ -283,7 +296,7 @@ public class MetadataManagerImpl implements MetadataManager {
                 // 记录错误
                 refreshStrategy.recordError(topic);
                 
-                // 📊 指标埋点: 元数据解析失败
+                // 指标埋点: 元数据解析失败
                 metricsCollector.incrementCounter("metadata.refresh.parse_error", labels);
             }
 
@@ -292,7 +305,7 @@ public class MetadataManagerImpl implements MetadataManager {
             // 记录错误
             refreshStrategy.recordError(topic);
             
-            // 📊 指标埋点: 元数据刷新失败
+            // 指标埋点: 元数据刷新失败
             long endTime = System.currentTimeMillis();
             metricsCollector.incrementCounter("metadata.refresh.error", labels);
             metricsCollector.recordLatency("metadata.refresh.error_latency", endTime - startTime, labels);
@@ -308,7 +321,12 @@ public class MetadataManagerImpl implements MetadataManager {
     
     // 新增：关闭连接池
     public void close() {
-        System.out.println("[MetadataManagerImpl] 关闭元数据连接池");
+        System.out.println("[MetadataManagerImpl] 关闭元数据管理器");
+        
+        // 停止DNS检查定时器
+        stopDnsCheckTimer();
+        
+        // 关闭连接池
         for (Map.Entry<String, KafkaSocketClient.ConnectionPool> entry : connectionPools.entrySet()) {
             try {
                 entry.getValue().close();
@@ -383,6 +401,47 @@ public class MetadataManagerImpl implements MetadataManager {
     }
     
     /**
+     * 比较两个IP列表是否相同（忽略顺序）
+     * 解决因为DNS返回顺序变化导致的误切换问题
+     */
+    private boolean areBootstrapServersChanged(List<String> oldList, List<String> newList) {
+        if (oldList == null && newList == null) {
+            return false;
+        }
+        if (oldList == null || newList == null) {
+            return true;
+        }
+        if (oldList.size() != newList.size()) {
+            return true;
+        }
+        
+        // 转换为Set进行比较，忽略顺序
+        Set<String> oldSet = new HashSet<>(oldList);
+        Set<String> newSet = new HashSet<>(newList);
+        
+        boolean changed = !oldSet.equals(newSet);
+        
+        if (changed) {
+            System.out.printf("[MetadataManagerImpl] 检测到实际IP变化:\n");
+            System.out.printf("  移除的IP: %s\n", getSetDifference(oldSet, newSet));
+            System.out.printf("  新增的IP: %s\n", getSetDifference(newSet, oldSet));
+        } else {
+            System.out.printf("[MetadataManagerImpl] IP成员无变化，仅顺序不同: 旧=%s, 新=%s\n", oldList, newList);
+        }
+        
+        return changed;
+    }
+    
+    /**
+     * 获取两个集合的差集
+     */
+    private Set<String> getSetDifference(Set<String> set1, Set<String> set2) {
+        Set<String> difference = new HashSet<>(set1);
+        difference.removeAll(set2);
+        return difference;
+    }
+    
+    /**
      * 设置bootstrap servers变化回调
      */
     public void setBootstrapServersChangedCallback(Runnable callback) {
@@ -417,25 +476,25 @@ public class MetadataManagerImpl implements MetadataManager {
     private void checkDnsChangesProactively() {
         long startTime = System.currentTimeMillis();
         
-        // 📊 指标埋点: DNS检查尝试
+        // 指标埋点: DNS检查尝试
         metricsCollector.incrementCounter("dns.check.attempt");
         
         try {
             // 重新解析DNS
             List<String> newBootstrapServers = resolveDomainToIPs(originalDomain);
             
-            // 📊 指标埋点: DNS解析成功
+            // 指标埋点: DNS解析成功
             long dnsLatency = System.currentTimeMillis() - startTime;
             metricsCollector.recordLatency(MetricsCollector.METRIC_DNS_RESOLUTION, dnsLatency);
             
-            // 检查是否有变化
-            if (!newBootstrapServers.equals(bootstrapServers)) {
-                System.out.printf("[MetadataManagerImpl] 🔍 主动发现DNS变化:\n");
+            // 检查是否有变化（忽略顺序变化）
+            if (areBootstrapServersChanged(bootstrapServers, newBootstrapServers)) {
+                System.out.printf("[MetadataManagerImpl] 主动发现DNS变化:\n");
                 System.out.printf("  当前IP列表: %s\n", bootstrapServers);
                 System.out.printf("  新解析IP列表: %s\n", newBootstrapServers);
                 System.out.println("  触发主动切换...");
                 
-                // 📊 指标埋点: DNS变化检测到
+                // 指标埋点: DNS变化检测到
                 metricsCollector.incrementCounter("dns.change.detected");
                 metricsCollector.incrementCounter(MetricsCollector.METRIC_DR_SWITCH);
                 
@@ -452,25 +511,25 @@ public class MetadataManagerImpl implements MetadataManager {
                 // 通知所有相关组件更新连接
                 notifyBootstrapServersChanged(newBootstrapServers);
                 
-                System.out.printf("[MetadataManagerImpl] ✅ 主动切换完成: %s\n", newBootstrapServers);
+                System.out.printf("[MetadataManagerImpl] 主动切换完成: %s\n", newBootstrapServers);
                 
-                // 📊 指标埋点: DNS切换成功
+                // 指标埋点: DNS切换成功
                 metricsCollector.incrementCounter("dns.switch.success");
                 
             } else {
-                // 📊 指标埋点: DNS无变化
+                // 指标埋点: DNS无变化
                 metricsCollector.incrementCounter("dns.check.no_change");
                 
                 // DNS没有变化，可以输出调试信息（但不要太频繁）
                 if (System.currentTimeMillis() % 60000 < 1000) { // 大约每分钟输出一次
-                    System.out.printf("[MetadataManagerImpl] 🔍 DNS检查: 无变化 %s\n", bootstrapServers);
+                    System.out.printf("[MetadataManagerImpl] DNS检查: 无变化 %s\n", bootstrapServers);
                 }
             }
             
         } catch (Exception e) {
             System.err.printf("[MetadataManagerImpl] 主动DNS检查失败: %s\n", e.getMessage());
             
-            // 📊 指标埋点: DNS检查失败
+            // 指标埋点: DNS检查失败
             metricsCollector.incrementCounter("dns.check.error");
             
             // 不抛出异常，避免影响正常的metadata刷新
@@ -480,6 +539,49 @@ public class MetadataManagerImpl implements MetadataManager {
     // 用于跟踪broker切换的辅助方法
     private String getLastUsedBroker() {
         return lastUsedBroker;
+    }
+    
+    /**
+     * 启动低频DNS检查定时器
+     */
+    private void startDnsCheckTimer() {
+        if (dnsCheckExecutor == null) {
+            dnsCheckExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "dns-check-timer");
+                t.setDaemon(true);
+                return t;
+            });
+            
+            dnsCheckExecutor.scheduleWithFixedDelay(() -> {
+                try {
+                    System.out.printf("[MetadataManagerImpl] 执行定期DNS检查 (间隔=%d分钟)\n", DNS_CHECK_INTERVAL_MS / 60000);
+                    checkDnsChangesProactively();
+                } catch (Exception e) {
+                    System.err.printf("[MetadataManagerImpl] 定期DNS检查异常: %s\n", e.getMessage());
+                }
+            }, DNS_CHECK_INTERVAL_MS, DNS_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
+            
+            System.out.printf("[MetadataManagerImpl] DNS检查定时器已启动，间隔=%d分钟\n", DNS_CHECK_INTERVAL_MS / 60000);
+        }
+    }
+    
+    /**
+     * 停止DNS检查定时器
+     */
+    private void stopDnsCheckTimer() {
+        if (dnsCheckExecutor != null) {
+            dnsCheckExecutor.shutdown();
+            try {
+                if (!dnsCheckExecutor.awaitTermination(1, TimeUnit.SECONDS)) {
+                    dnsCheckExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                dnsCheckExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            dnsCheckExecutor = null;
+            System.out.println("[MetadataManagerImpl] DNS检查定时器已停止");
+        }
     }
     
     private void setLastUsedBroker(String broker) {

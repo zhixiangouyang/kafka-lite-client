@@ -70,7 +70,7 @@ public class DomainSupportProducerTest {
             System.out.println("=== 创建支持域名的生产者 ===");
             System.out.printf("使用域名: %s%n", kafkaDomain);
 
-            // 🎯 新功能：解析域名为IP列表，创建支持动态DNS的MetadataManager
+            // 新功能：解析域名为IP列表，创建支持动态DNS的MetadataManager
             List<String> bootstrapServers = resolveDomainToIPs(kafkaDomain);
             System.out.printf("域名解析结果: %s%n", bootstrapServers);
 
@@ -89,11 +89,11 @@ public class DomainSupportProducerTest {
             setMetadataManager(producer, metadataManager);
 
             System.out.println("\n=== 开始持续生产消息（演示自动DR切换） ===");
-            System.out.println("🎯 新功能: 双重DNS检查机制");
+            System.out.println("新功能: 双重DNS检查机制");
             System.out.println("  1. 主动检查: 每次metadata refresh都检查DNS变化");
             System.out.println("  2. 被动检查: 所有broker失败时重新解析DNS");
             System.out.println();
-            System.out.println("📋 测试方法:");
+            System.out.println("测试方法:");
             System.out.println("  方法1: 修改域名指向，无需停止原broker");
             System.out.println("  方法2: 停止所有当前IP的broker，启动新IP的broker");
             System.out.println();
@@ -218,7 +218,7 @@ public class DomainSupportProducerTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
 
                                 ProducerRecord record = new ProducerRecord(
-                                        "cluster-test-topic-4",
+                                            "cluster-test-topic-7",
                                         "key" + localIndex,
                                         messageValue
                                 );
@@ -327,22 +327,22 @@ public class DomainSupportProducerTest {
      * 处理bootstrap servers变化
      */
     private static void handleBootstrapServersChanged(MetadataManagerImpl metadataManager) {
-        System.out.println("\n🔄 [生产者] 开始处理bootstrap servers变化...");
+        System.out.println("\n[生产者] 开始处理bootstrap servers变化...");
 
         try {
             // 获取新的bootstrap servers
             List<String> newBootstrapServers = metadataManager.getBootstrapServers();
-            System.out.printf("🔄 [生产者] 新的bootstrap servers: %s%n", newBootstrapServers);
+            System.out.printf("[生产者] 新的bootstrap servers: %s%n", newBootstrapServers);
 
             // 这里可以添加更多的处理逻辑，比如：
             // 1. 更新连接池
             // 2. 清理旧的元数据缓存
             // 3. 重新初始化某些组件
 
-            System.out.println("✅ [生产者] bootstrap servers变化处理完成");
+            System.out.println("[生产者] bootstrap servers变化处理完成");
 
         } catch (Exception e) {
-            System.err.printf("❌ [生产者] 处理bootstrap servers变化时出错: %s%n", e.getMessage());
+            System.err.printf("[生产者] 处理bootstrap servers变化时出错: %s%n", e.getMessage());
         }
     }
 
@@ -354,10 +354,10 @@ public class DomainSupportProducerTest {
             java.lang.reflect.Field field = KafkaLiteProducerImpl.class.getDeclaredField("metadataManager");
             field.setAccessible(true);
             field.set(producer, metadataManager);
-            System.out.println("✅ 成功设置支持动态DNS的MetadataManager");
+            System.out.println("成功设置支持动态DNS的MetadataManager");
         } catch (Exception e) {
-            System.err.printf("❌ 设置MetadataManager失败: %s%n", e.getMessage());
-            System.err.println("⚠️  生产者将使用默认的MetadataManager，不支持动态DNS切换");
+            System.err.printf("设置MetadataManager失败: %s%n", e.getMessage());
+            System.err.println(" 生产者将使用默认的MetadataManager，不支持动态DNS切换");
         }
     }
 
@@ -371,7 +371,7 @@ public class DomainSupportProducerTest {
                 .maxRetries(3)
                 .acks((short) 1)       // 使用acks=1，平衡性能和可靠性
                 .maxQueueSize(100000)  // 队列大小
-                .connectionPoolSize(20) // 🔧 增加连接池大小，避免耗尽
+                .connectionPoolSize(20) // 增加连接池大小，避免耗尽
                 .build();
     }
 
@@ -428,10 +428,10 @@ public class DomainSupportProducerTest {
  *    [DomainSupportProducerTest] 域名 localhost:9092 解析到 X 个IP: [...]
  *
  *    主动检查（新功能）:
- *    [MetadataManagerImpl] 🔍 主动发现DNS变化:
+ *    [MetadataManagerImpl] 主动发现DNS变化:
  *    [MetadataManagerImpl]   当前IP列表: [old_ips]
  *    [MetadataManagerImpl]   新解析IP列表: [new_ips]
- *    [MetadataManagerImpl] ✅ 主动切换完成: [new_ips]
+ *    [MetadataManagerImpl] 主动切换完成: [new_ips]
  *
  *    被动检查（兜底）:
  *    [MetadataManagerImpl] 所有broker都不可用，尝试重新解析DNS...
@@ -439,8 +439,8 @@ public class DomainSupportProducerTest {
  *
  *    通用处理:
  *    [MetadataManagerImpl] 通知组件bootstrap servers已更新: [...]
- *    [DomainSupportProducerTest] 🔄 开始处理bootstrap servers变化...
- *    [DomainSupportProducerTest] ✅ bootstrap servers变化处理完成
+ *    [DomainSupportProducerTest] 开始处理bootstrap servers变化...
+ *    [DomainSupportProducerTest] bootstrap servers变化处理完成
  *
  * 5. 与传统方案对比：
  *    传统: new KafkaLiteProducerImpl(Arrays.asList("ip1:9092", "ip2:9092"), partitioner, config)

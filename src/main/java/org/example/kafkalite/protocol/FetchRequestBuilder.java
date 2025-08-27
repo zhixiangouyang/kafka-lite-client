@@ -15,6 +15,10 @@ public class FetchRequestBuilder {
      * @return ByteBuffer
      */
     public static ByteBuffer build(String clientId, String topic, int partition, long fetchOffset, int maxBytes, int correlationId) {
+        return build(clientId, topic, partition, fetchOffset, maxBytes, correlationId, 5000);
+    }
+    
+    public static ByteBuffer build(String clientId, String topic, int partition, long fetchOffset, int maxBytes, int correlationId, int maxWaitTimeMs) {
         int estimatedSize = 256;
         ByteBuffer buf = ByteBuffer.allocate(estimatedSize);
         buf.position(4);   // 预留4字节填充长度
@@ -33,7 +37,7 @@ public class FetchRequestBuilder {
 
         // 2. 请求体
         buf.putInt(-1); //replicaId, -1表示不同消费者
-        buf.putInt(100);  // maxWaitTime, 最大等待时间ms
+        buf.putInt(maxWaitTimeMs);  // 使用可配置的maxWaitTime
         buf.putInt(1);     // minBytes, 最小返回字节数
 
         // topics array

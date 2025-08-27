@@ -46,10 +46,10 @@ public class PrometheusMetricsServer {
         server.start();
         running = true;
         
-        System.out.printf("[PrometheusMetricsServer] ✅ Prometheus指标服务器已启动\n");
-        System.out.printf("  📊 指标端点: http://localhost:%d/metrics\n", port);
+        System.out.printf("[PrometheusMetricsServer] Prometheus指标服务器已启动\n");
+        System.out.printf("  指标端点: http://localhost:%d/metrics\n", port);
         System.out.printf("  💚 健康检查: http://localhost:%d/health\n", port);
-        System.out.printf("  🔧 线程池: 2个工作线程\n");
+        System.out.printf("  线程池: 2个工作线程\n");
     }
     
     /**
@@ -64,7 +64,7 @@ public class PrometheusMetricsServer {
         server.stop(5); // 等待5秒钟让现有请求完成
         running = false;
         
-        System.out.printf("[PrometheusMetricsServer] ❌ Prometheus指标服务器已停止 (端口: %d)\n", port);
+        System.out.printf("[PrometheusMetricsServer] Prometheus指标服务器已停止 (端口: %d)\n", port);
     }
     
     /**
@@ -119,17 +119,17 @@ public class PrometheusMetricsServer {
                 
                 // 记录访问日志
                 String clientAddress = exchange.getRemoteAddress().getAddress().getHostAddress();
-                System.out.printf("[PrometheusMetricsServer] 📊 指标请求: %s -> 200 OK (%d bytes)\n", 
+                System.out.printf("[PrometheusMetricsServer] 指标请求: %s -> 200 OK (%d bytes)\n", 
                     clientAddress, metricsData.getBytes(StandardCharsets.UTF_8).length);
                 
             } catch (Exception e) {
-                System.err.printf("[PrometheusMetricsServer] ❌ 处理指标请求时出错: %s\n", e.getMessage());
+                System.err.printf("[PrometheusMetricsServer] 处理指标请求时出错: %s\n", e.getMessage());
                 e.printStackTrace();
                 
                 try {
                     sendResponse(exchange, 500, "Internal Server Error: " + e.getMessage());
                 } catch (IOException ioException) {
-                    System.err.printf("[PrometheusMetricsServer] ❌ 发送错误响应失败: %s\n", ioException.getMessage());
+                    System.err.printf("[PrometheusMetricsServer] 发送错误响应失败: %s\n", ioException.getMessage());
                 }
             }
         }
@@ -170,7 +170,7 @@ public class PrometheusMetricsServer {
                 sendResponse(exchange, 200, healthResponse);
                 
             } catch (Exception e) {
-                System.err.printf("[PrometheusMetricsServer] ❌ 处理健康检查请求时出错: %s\n", e.getMessage());
+                System.err.printf("[PrometheusMetricsServer] 处理健康检查请求时出错: %s\n", e.getMessage());
                 sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"" + e.getMessage() + "\"}");
             }
         }

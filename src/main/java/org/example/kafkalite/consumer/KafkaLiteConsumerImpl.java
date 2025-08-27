@@ -74,7 +74,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         this.coordinator.setMetadataManager(this.metadataManager);
         this.offsetManager.setCoordinator(this.coordinator);
         
-        // 🔧 设置bootstrap servers变化回调，处理DNS重解析后的连接更新
+        // 设置bootstrap servers变化回调，处理DNS重解析后的连接更新
         if (this.metadataManager instanceof MetadataManagerImpl) {
             ((MetadataManagerImpl) this.metadataManager).setBootstrapServersChangedCallback(() -> {
                 handleBootstrapServersChanged();
@@ -149,11 +149,11 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             topicPartitionLeaders.clear();
             System.out.println("[集群切换] 已清空partition leader缓存");
             
-            // 🔧 4. 更新ConsumerCoordinator的bootstrap servers
+            // 4. 更新ConsumerCoordinator的bootstrap servers
             System.out.println("[集群切换] 更新ConsumerCoordinator的bootstrap servers...");
             coordinator.updateBootstrapServers(newBootstrapServers);
             
-            // 🔧 5. 更新OffsetManager的bootstrap servers（这会清空本地offset缓存）
+            // 5. 更新OffsetManager的bootstrap servers（这会清空本地offset缓存）
             System.out.println("[集群切换] 更新OffsetManager的bootstrap servers...");
             offsetManager.updateBootstrapServers(newBootstrapServers);
             
@@ -176,18 +176,18 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                 }
                 
                 boolean allTopicsSuccess = true;
-                for (String topic : subscribedTopics) {
-                    try {
+            for (String topic : subscribedTopics) {
+                try {
                         // 强制刷新元数据，跳过智能策略
                         if (metadataManager instanceof MetadataManagerImpl) {
                             ((MetadataManagerImpl) metadataManager).forceRefreshMetadata(topic);
                         } else {
-                            metadataManager.refreshMetadata(topic, true, false); // error-triggered refresh
+                    metadataManager.refreshMetadata(topic, true, false); // error-triggered refresh
                         }
-                        Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
+                    Map<Integer, String> leaders = metadataManager.getPartitionLeaders(topic);
                         
                         if (leaders != null && !leaders.isEmpty()) {
-                            topicPartitionLeaders.put(topic, leaders);
+                    topicPartitionLeaders.put(topic, leaders);
                             topicPartitions.put(topic, new ArrayList<>(leaders.keySet()));
                             System.out.printf("[集群切换] 已更新topic %s 的partition leaders: %s\n", topic, leaders);
                         } else {
@@ -212,14 +212,14 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                 return;
             }
             
-            // 🔧 7. 关键修复：触发重新加入消费者组（在元数据更新后）
+            // 7. 关键修复：触发重新加入消费者组（在元数据更新后）
             System.out.println("[集群切换] 触发重新加入消费者组...");
             coordinator.triggerRejoinGroup();
             
-            // 🔧 8. 等待coordinator稳定
+            // 8. 等待coordinator稳定
             waitForCoordinatorStable();
             
-            // 🔧 9. 关键修复：重新从新集群获取已提交的offset
+            // 9. 关键修复：重新从新集群获取已提交的offset
             if (!topicPartitions.isEmpty() && coordinator.isStable()) {
                 System.out.println("[集群切换] 重新获取已提交的offset...");
                 try {
@@ -340,7 +340,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         long startTime = System.currentTimeMillis();
         List<ConsumerRecord> allRecords = new ArrayList<>();
         
-        // 📊 指标埋点: poll调用计数
+        // 指标埋点: poll调用计数
         metricsCollector.incrementCounter("consumer.poll.attempt");
         
         System.out.println("[Poll] 开始拉取消息...");
@@ -389,7 +389,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                             partition,
                             offset,
                             config.getFetchMaxBytes(),
-                            1
+                            1,
+                            config.getFetchMaxWaitMs()  // 使用配置的等待时间
                         );
                         ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, fetchRequest);
                         List<ConsumerRecord> records = FetchResponseParser.parse(response);
@@ -400,7 +401,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                             System.out.printf("[DEBUG] poll调用updateOffset: topic=%s, partition=%d, offset=%d\n", topic, partition, lastOffset+1);
                             offsetManager.updateOffset(topic, partition, lastOffset + 1);
                             
-                            // 📊 指标埋点: 成功拉取消息
+                            // 指标埋点: 成功拉取消息
                             Map<String, String> labels = new HashMap<>();
                             labels.put("topic", topic);
                             labels.put("partition", String.valueOf(partition));
@@ -414,7 +415,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                         } else {
                             System.out.printf("[Poll] topic=%s, partition=%d, fetched=0%n", topic, partition);
                             
-                            // 📊 指标埋点: 空拉取
+                            // 指标埋点: 空拉取
                             Map<String, String> labels = new HashMap<>();
                             labels.put("topic", topic);
                             labels.put("partition", String.valueOf(partition));
@@ -425,7 +426,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                     } catch (Exception e) {
                         System.err.println("[Poll] 拉取异常: " + e.getMessage());
                         
-                        // 📊 指标埋点: 拉取失败
+                        // 指标埋点: 拉取失败
                         Map<String, String> labels = new HashMap<>();
                         labels.put("topic", topic);
                         labels.put("partition", String.valueOf(partition));
@@ -439,7 +440,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                             metadataManager.refreshMetadata(topic, true, false);
                             topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
                             
-                            // 📊 指标埋点: 最终拉取失败
+                            // 指标埋点: 最终拉取失败
                             metricsCollector.incrementCounter("consumer.fetch.final_failure", labels);
                             
                             // 重试失败后抛出异常，而不是静默失败
@@ -463,7 +464,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             long endTime = System.currentTimeMillis();
             long pollLatency = endTime - startTime;
             
-            // 📊 指标埋点: poll完成统计（只包含拉取时间）
+            // 指标埋点: poll完成统计（只包含拉取时间）
             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_POLL);
             metricsCollector.recordLatency(MetricsCollector.METRIC_CONSUMER_POLL, pollLatency);
             
@@ -499,11 +500,11 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         try {
             offsetManager.commitSync(coordinator.getGenerationId(), coordinator.getMemberId());
             
-            // 📊 指标埋点: 提交成功
+            // 指标埋点: 提交成功
             metricsCollector.incrementCounter("consumer.commit.success");
             
         } catch (Exception e) {
-            // 📊 指标埋点: 提交失败
+            // 指标埋点: 提交失败
             metricsCollector.incrementCounter("consumer.commit.error");
             throw e;
         }
@@ -614,7 +615,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
             long endTime = System.currentTimeMillis();
             long commitLatency = endTime - startTime;
             
-            // 📊 记录自动提交的延迟
+            // 记录自动提交的延迟
             metricsCollector.incrementCounter("consumer.auto_commit");
             metricsCollector.recordLatency("consumer.auto_commit", commitLatency);
             

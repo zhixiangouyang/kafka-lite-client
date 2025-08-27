@@ -14,51 +14,57 @@ import java.util.concurrent.atomic.AtomicLong;
 public class KafkaSocketClient {
     public static ByteBuffer sendAndReceive(String host, int port, ByteBuffer request) {
         // System.out.println("[KafkaSocketClient] Connecting to " + host + ":" + port);
+        System.out.printf("[KafkaSocketClient] 开始连接: %s:%d\n", host, port);
         
         Socket socket = null;
         try {
             socket = new Socket(host, port);
-            socket.setSoTimeout(30000); // 30秒超时
+            socket.setSoTimeout(10000); // 减少到10秒超时，避免长时间阻塞
+            System.out.printf("[KafkaSocketClient] 连接成功: %s:%d\n", host, port);
             
             // 发送请求
+            System.out.printf("[KafkaSocketClient] 开始发送请求: %s:%d, 大小: %d bytes\n", host, port, request.remaining());
             OutputStream out = socket.getOutputStream();
             byte[] requestBytes = new byte[request.remaining()];
             request.get(requestBytes);
             out.write(requestBytes);
             out.flush();
-            // System.out.println("[KafkaSocketClient] Sent " + requestBytes.length + " bytes");
+            System.out.printf("[KafkaSocketClient] 请求发送完成: %s:%d\n", host, port);
             
             // 读取响应大小
+            System.out.printf("[KafkaSocketClient] 开始读取响应大小: %s:%d\n", host, port);
             InputStream in = socket.getInputStream();
             byte[] sizeBuf = new byte[4];
             readFully(in, sizeBuf);
             int size = ByteBuffer.wrap(sizeBuf).getInt();
-            // System.out.println("[KafkaSocketClient] Response size: " + size + " bytes");
+            System.out.printf("[KafkaSocketClient] 响应大小: %d bytes from %s:%d\n", size, host, port);
             
             if (size < 0 || size > 10 * 1024 * 1024) { // 最大10MB
                 throw new IllegalArgumentException("Invalid response size: " + size);
             }
 
             // 读取响应内容
+            System.out.printf("[KafkaSocketClient] 开始读取响应内容: %s:%d, 大小: %d bytes\n", host, port, size);
             byte[] responseBuf = new byte[size + 4]; // 包含size字段
             System.arraycopy(sizeBuf, 0, responseBuf, 0, 4);
             readFully(in, responseBuf, 4, size);
             
             ByteBuffer response = ByteBuffer.wrap(responseBuf);
-            // System.out.println("[KafkaSocketClient] Received response successfully");
+            System.out.printf("[KafkaSocketClient] 响应接收完成: %s:%d\n", host, port);
             return response;
             
         } catch (Exception e) {
-            System.err.println("[KafkaSocketClient] Error: " + e.getMessage());
+            System.err.printf("[KafkaSocketClient] 错误: %s:%d, 异常: %s\n", host, port, e.getMessage());
             throw new RuntimeException(e);
         } finally {
             if (socket != null) {
                 try {
                     socket.close();
+                    System.out.printf("[KafkaSocketClient] 连接已关闭: %s:%d\n", host, port);
                 } catch (IOException e) {
-                    System.err.println("[KafkaSocketClient] Error closing socket: " + e.getMessage());
-        }
-    }
+                    System.err.printf("[KafkaSocketClient] 关闭连接错误: %s:%d, 错误: %s\n", host, port, e.getMessage());
+                }
+            }
         }
     }
     
@@ -87,7 +93,7 @@ public class KafkaSocketClient {
         private final AtomicBoolean closed = new AtomicBoolean(false);
         private final int maxPoolSize;
         private final int connectionTimeout = 5000; // 连接超时时间5秒
-        private final int socketTimeout = 30000;    // 套接字超时时间30秒
+        private final int socketTimeout = 10000;    // 套接字超时时间改为10秒，避免长时间阻塞
         private final AtomicLong totalConnections = new AtomicLong(0);
         private final AtomicLong successfulRequests = new AtomicLong(0);
         private final AtomicLong failedRequests = new AtomicLong(0);
@@ -142,13 +148,13 @@ public class KafkaSocketClient {
                 socket = socketPool.poll(100, TimeUnit.MILLISECONDS);
                 
                 if (socket == null) {
-                    // 🔧 修复竞态条件：原子性地检查和递增连接数
+                    // 修复竞态条件：原子性地检查和递增连接数
                     long currentConnections = totalConnections.get();
                     if (currentConnections < maxPoolSize && totalConnections.compareAndSet(currentConnections, currentConnections + 1)) {
                         // 成功预留了一个连接槽位
                         try {
                             System.out.printf("池中无可用连接，创建新连接到 %s:%d (当前连接数: %d/%d)%n", host, port, currentConnections + 1, maxPoolSize);
-                            socket = createSocket();
+                        socket = createSocket();
                         } catch (Exception e) {
                             // 创建失败，回滚连接数
                             totalConnections.decrementAndGet();
@@ -204,11 +210,11 @@ public class KafkaSocketClient {
                 
                 ByteBuffer response = ByteBuffer.wrap(responseBuf);
                 
-                // 🔧 修复：总是尝试将连接放回池中（如果连接有效）
+                // 修复：总是尝试将连接放回池中（如果连接有效）
                 if (returnToPool && !closed.get() && socket != null && !socket.isClosed() && socket.isConnected()) {
                     boolean offered = socketPool.offer(socket);
                     if (offered) {
-                        socket = null; // 防止finally中关闭
+                    socket = null; // 防止finally中关闭
                         // System.out.printf("[DEBUG] 连接已归还到池: %s:%d, 池大小: %d\n", host, port, socketPool.size());
                     } else {
                         System.err.printf("连接池已满，无法归还连接: %s:%d\n", host, port);
@@ -233,14 +239,14 @@ public class KafkaSocketClient {
                 throw new RuntimeException("IO error with connection: " + e.getMessage(), e);
             } catch (java.nio.BufferOverflowException e) {
                 System.err.printf("缓冲区溢出: %s:%d, 错误: %s%n", host, port, e.getMessage());
-                // 🔧 BufferOverflowException通常是数据问题，连接可能还是好的
+                // BufferOverflowException通常是数据问题，连接可能还是好的
                 // 但为了安全起见，也不归还连接
                 returnToPool = false;
                 failedRequests.incrementAndGet();
                 throw new RuntimeException("Buffer overflow: " + e.getMessage(), e);
             } catch (Exception e) {
                 System.err.printf("连接错误: %s:%d, 错误: %s%n", host, port, e.getMessage());
-                // 🔧 对于未知异常，检查连接状态来决定是否归还
+                // 对于未知异常，检查连接状态来决定是否归还
                 if (socket != null && !socket.isClosed() && socket.isConnected()) {
                     System.out.printf("未知异常但连接仍有效: %s:%d, 尝试归还连接\n", host, port);
                     // 连接看起来还是好的，可以尝试归还

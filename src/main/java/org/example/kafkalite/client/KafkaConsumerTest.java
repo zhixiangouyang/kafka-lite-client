@@ -43,6 +43,7 @@ public class KafkaConsumerTest {
         config.setEnableAutoCommit(true);           // 启用自动提交
         config.setAutoCommitIntervalMs(5000);       // 自动提交间隔5秒
         config.setFetchMaxBytes(1024 * 1024);       // 单次最多拉取1MB数据
+        config.setFetchMaxWaitMs(2000);             // fetch超时2秒，基础消费测试
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
         config.setHeartbeatIntervalMs(1000);        // 心跳间隔1秒

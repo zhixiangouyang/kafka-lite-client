@@ -131,7 +131,7 @@ public class KafkaProducerOrderTest {
                                 mbps,
                                 producer.getQueueSize());
 
-                        // 🎯 扩展延迟分布监控
+                        // 扩展延迟分布监控
                         System.out.printf("    �� 延迟分布: P50=%.1fms | P95=%.1fms | P99=%.1fms | P99.9=%.1fms | 平均=%.1fms | 最大=%.1fms%n",
                                 producer.getProducerP50Latency(),
                                 producer.getProducerP95Latency(),
@@ -150,10 +150,10 @@ public class KafkaProducerOrderTest {
             monitorThread.setDaemon(true);
             monitorThread.start();
 
-            System.out.println("🚀 开始生产者性能测试...");
+            System.out.println("开始生产者性能测试...");
             System.out.printf("📍 目标Broker: %s\n", broker);
-            System.out.printf("⏱️  测试时长: %.1f分钟\n", testDurationMs / 60000.0);
-            System.out.printf("📊 监控端点: http://localhost:8083/metrics\n");
+            System.out.printf(" 测试时长: %.1f分钟\n", testDurationMs / 60000.0);
+            System.out.printf("监控端点: http://localhost:8083/metrics\n");
             System.out.printf("💚 健康检查: http://localhost:8083/health\n");
             System.out.println("�� 消息将包含有序前缀，用于检测乱序问题");
             System.out.println("📝 消息格式: ORDER-{线程ID}-{序列号}:{消息内容}");
@@ -196,7 +196,7 @@ public class KafkaProducerOrderTest {
                                 // 从模板中随机选择一个消息，并添加有序前缀
                                 String messageTemplate = messageTemplates[random.nextInt(messageTemplates.length)];
 
-                                // 🔍 添加有序前缀，用于检测乱序
+                                // 添加有序前缀，用于检测乱序
                                 String orderPrefix = String.format("ORDER-%02d-%06d:", threadId, localIndex);
 
                                 // 计算消息内容长度，确保总长度不超过限制
@@ -268,18 +268,18 @@ public class KafkaProducerOrderTest {
             System.out.println("\n================================================================================");
             System.out.println("🏁 最终测试结果:");
             System.out.println("================================================================================");
-            System.out.printf("⏱️  总测试时间: %.2f秒\n", totalSeconds);
+            System.out.printf(" 总测试时间: %.2f秒\n", totalSeconds);
             System.out.printf("�� 消息统计: 总发送=%d, 错误=%d, 成功率=%.3f%%\n", finalCount, finalErrors, 100.0 - errorRate);
-            System.out.printf("🚀 平均QPS: %.2f msg/s\n", finalQps);
+            System.out.printf("平均QPS: %.2f msg/s\n", finalQps);
             System.out.printf("�� 平均吞吐量: %.2f MB/s (总计: %.2f MB)\n", finalMbps, finalBytes / (1024.0 * 1024.0));
-            System.out.printf("⚠️  错误率: %.3f%%\n", errorRate);
-            System.out.printf("⏱️  最终P99延迟: %.2f ms\n", producer.getProducerP99Latency());
+            System.out.printf(" 错误率: %.3f%%\n", errorRate);
+            System.out.printf(" 最终P99延迟: %.2f ms\n", producer.getProducerP99Latency());
 
             // 更新最终指标
             updateFinalPrometheusMetrics(finalCount, finalErrors, finalBytes, finalQps, finalMbps, errorRate);
 
             System.out.println("================================================================================");
-            System.out.println("🔍 消息乱序检测说明:");
+            System.out.println("消息乱序检测说明:");
             System.out.println("  • 每条消息都包含有序前缀 (ORDER-00-000000:, ORDER-00-000001:, ...)");
             System.out.println("  • 如果消费者收到乱序消息，前缀的顺序会不连续");
             System.out.println("  • 建议使用消费者测试验证消息顺序");
@@ -325,11 +325,11 @@ public class KafkaProducerOrderTest {
             metricsServer = PrometheusMetricsServer.create(metricsCollector, 8083);
             metricsServer.start();
 
-            System.out.println("✅ Prometheus监控服务器已启动: http://localhost:8083/metrics");
+            System.out.println("Prometheus监控服务器已启动: http://localhost:8083/metrics");
 
         } catch (Exception e) {
-            System.err.printf("⚠️ 监控系统初始化失败: %s\n", e.getMessage());
-            System.err.println("⚠️ 测试将继续，但没有监控功能");
+            System.err.printf("监控系统初始化失败: %s\n", e.getMessage());
+            System.err.println("测试将继续，但没有监控功能");
         }
     }
 

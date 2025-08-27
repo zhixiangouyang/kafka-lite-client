@@ -264,7 +264,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             
         } catch (Exception e) {
             System.err.printf("处理消息失败: topic=%s, 错误=%s%n", topic, e.getMessage());
-            // 📊 指标埋点: 消息处理失败
+            // 指标埋点: 消息处理失败
             metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
         }
     }
@@ -293,7 +293,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         if (batch.isEmpty()) return;
         
         long startTime = System.currentTimeMillis();
-        // 📊 指标埋点: 记录分区批次发送尝试
+        // 指标埋点: 记录分区批次发送尝试
         Map<String, String> labels = new java.util.HashMap<>();
         labels.put("topic", topic);
         labels.put("partition", String.valueOf(partition));
@@ -355,7 +355,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 throw e;
             }
             
-            // 🔧 通过连接池发送，添加重试逻辑
+            // 通过连接池发送，添加重试逻辑
             ByteBuffer response = null;
             Exception lastException = null;
             
@@ -384,24 +384,24 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                         }
                     }
                     
-                    response = connectionPool.sendAndReceive(request);
+                response = connectionPool.sendAndReceive(request);
                     System.out.printf("成功发送 %d 条消息到 topic=%s, partition=%d%s%n", 
                         batch.size(), topic, partition, retryCount > 0 ? " (重试成功)" : "");
-                    
-                    // 📊 指标埋点: 批次发送成功
-                    metricsCollector.incrementCounter("producer.batch.send.success", labels);
-                    for (int i = 0; i < batch.size(); i++) {
-                        metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
-                    }
-                    
+                
+                // 指标埋点: 批次发送成功
+                metricsCollector.incrementCounter("producer.batch.send.success", labels);
+                for (int i = 0; i < batch.size(); i++) {
+                    metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
+                }
+                
                     break; // 成功则退出重试循环
                     
-                } catch (Exception e) {
+            } catch (Exception e) {
                     lastException = e;
                     System.err.printf("发送失败: topic=%s, partition=%d, 重试=%d/%d, 错误: %s%n", 
                         topic, partition, retryCount, maxRetries, e.getMessage());
-                    
-                    // 📊 指标埋点: 批次发送重试
+                
+                    // 指标埋点: 批次发送重试
                     labels.put("retry_count", String.valueOf(retryCount));
                     metricsCollector.incrementCounter("producer.batch.send.retry", labels);
                     
@@ -409,12 +409,12 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                         System.err.printf("发送最终失败: topic=%s, partition=%d, 已重试%d次%n", 
                             topic, partition, maxRetries);
                         
-                        // 📊 指标埋点: 批次发送最终失败
-                        metricsCollector.incrementCounter("producer.batch.send.error", labels);
-                        for (int i = 0; i < batch.size(); i++) {
-                            metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
-                        }
-                        
+                        // 指标埋点: 批次发送最终失败
+                metricsCollector.incrementCounter("producer.batch.send.error", labels);
+                for (int i = 0; i < batch.size(); i++) {
+                    metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
+                }
+                
                         throw new RuntimeException("发送失败，已重试" + maxRetries + "次", lastException);
                     }
                 }
@@ -454,10 +454,10 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             long endTime = System.currentTimeMillis();
             long totalLatency = endTime - startTime;
             
-            // 📊 指标埋点: 记录批次发送延迟
+            // 指标埋点: 记录批次发送延迟
             metricsCollector.recordLatency("producer.batch.send.latency", totalLatency, labels);
             
-            // 🔧 修正：分别统计两种延迟
+            // 修正：分别统计两种延迟
             for (ProducerRecord record : batch) {
                 // 1. 真实端到端延迟：从消息创建到响应接收（包含队列等待时间）
                 if (record.getSendTimestamp() > 0) {
@@ -530,7 +530,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 1
         );
 
-        // 🔧 7. 通过连接池发送，添加重试逻辑
+        // 7. 通过连接池发送，添加重试逻辑
         Exception lastException = null;
         for (int retryCount = 0; retryCount <= maxRetries; retryCount++) {
             try {
@@ -542,7 +542,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                     metadataManager.refreshMetadata(topic, true, true);
                 }
                 
-                connectionPool.sendAndReceive(request);
+        connectionPool.sendAndReceive(request);
                 if (retryCount > 0) {
                     System.out.printf("单条消息重试发送成功: topic=%s, partition=%d\n", topic, partition);
                 }
@@ -576,21 +576,21 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             // 使用超时版本的offer，避免无限等待
             if (!recordQueue.offer(record, lingerMs, TimeUnit.MILLISECONDS)) {
                 System.err.println("警告: 发送缓冲区已满，消息被丢弃");
-                // 📊 指标埋点: 队列满错误
+                // 指标埋点: 队列满错误
                 metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
                 throw new RuntimeException("Send buffer is full");
             }
             
-            // 📊 指标埋点: 异步发送成功入队
+            // 指标埋点: 异步发送成功入队
             metricsCollector.incrementCounter("producer.send.queued");
             
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            // 📊 指标埋点: 中断错误
+            // 指标埋点: 中断错误
             metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
             throw new RuntimeException("Interrupted while adding record to queue", e);
         } finally {
-            // 📊 指标埋点: 记录入队延迟
+            // 指标埋点: 记录入队延迟
             long latency = System.currentTimeMillis() - startTime;
             metricsCollector.recordLatency("producer.send.queue_latency", latency);
         }
@@ -607,15 +607,15 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         // 直接调用现有的doSend方法进行同步发送
         doSend(record);
             
-            // 📊 指标埋点: 同步发送成功
+            // 指标埋点: 同步发送成功
             metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
             
         } catch (Exception e) {
-            // 📊 指标埋点: 同步发送失败
+            // 指标埋点: 同步发送失败
             metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
             throw e;
         } finally {
-            // 📊 指标埋点: 记录同步发送总延迟
+            // 指标埋点: 记录同步发送总延迟
             long latency = System.currentTimeMillis() - startTime;
             metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SEND, latency);
         }
@@ -750,7 +750,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     }
     
     /**
-     * 🔧 新增：清理所有连接池，用于解决连接泄漏问题
+     * 新增：清理所有连接池，用于解决连接泄漏问题
      */
     public void clearAllConnectionPools() {
         System.out.println("[Producer] 强制清理所有连接池...");
@@ -775,7 +775,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     }
     
     /**
-     * 🔧 新增：获取连接池状态信息，用于调试
+     * 新增：获取连接池状态信息，用于调试
      */
     public void printConnectionPoolStatus() {
         System.out.println("=== Producer连接池状态 ===");

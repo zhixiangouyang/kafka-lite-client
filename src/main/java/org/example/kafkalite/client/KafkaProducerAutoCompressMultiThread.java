@@ -50,7 +50,7 @@ public class KafkaProducerAutoCompressMultiThread {
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
 
-        // 🔧 修正配置：移除幂等性，使用acks=1保持一致性
+        // 修正配置：移除幂等性，使用acks=1保持一致性
 //        props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, "gzip");
         props.put(ProducerConfig.ACKS_CONFIG, "1");                          // 与自研客户端一致
 //        props.put(ProducerConfig.BATCH_SIZE_CONFIG, 1024 * 1024);             // 900KB
@@ -58,7 +58,7 @@ public class KafkaProducerAutoCompressMultiThread {
 //        props.put(ProducerConfig.RETRIES_CONFIG, 3);
 //        props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 1);  // 串行发送
 
-        // 🔧 不启用幂等性，避免acks冲突
+        // 不启用幂等性，避免acks冲突
         // props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);        // 注释掉
 
 //        props.put(ProducerConfig.BUFFER_MEMORY_CONFIG, 268435456);           // 256MB

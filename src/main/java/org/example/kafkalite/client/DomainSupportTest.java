@@ -52,18 +52,18 @@ public class DomainSupportTest {
         try {
             System.out.println("=== 创建支持域名的消费者 ===");
             
-            // 🎯 新功能：直接传入域名，自动解析为IP
+            // 新功能：直接传入域名，自动解析为IP
             consumer = new KafkaLiteConsumerImpl(groupId, kafkaDomain, config);
             
             // 订阅主题
-            consumer.subscribe(Arrays.asList("cluster-test-topic-4"));
+            consumer.subscribe(Arrays.asList("cluster-test-topic-7"));
             
             System.out.println("\n=== 开始持续消费（演示自动DR切换） ===");
-            System.out.println("🎯 新功能: 双重DNS检查机制");
+            System.out.println("新功能: 双重DNS检查机制");
             System.out.println("  1. 主动检查: 每次metadata refresh都检查DNS变化");
             System.out.println("  2. 被动检查: 所有broker失败时重新解析DNS");
             System.out.println();
-            System.out.println("📋 测试方法:");
+            System.out.println("测试方法:");
             System.out.println("  方法1: 修改域名指向，无需停止原broker");
             System.out.println("  方法2: 停止所有当前IP的broker，启动新IP的broker");
             System.out.println();
@@ -82,7 +82,7 @@ public class DomainSupportTest {
                     
                     // 打印消费到的消息
 //                    for (ConsumerRecord record : records) {
-//                        System.out.printf("✅ 收到消息: topic=%s, partition=%d\n",
+//                        System.out.printf(" 收到消息: topic=%s, partition=%d\n",
 //                            record.getTopic(),
 //                            record.getPartition()
 //                        );
@@ -91,8 +91,8 @@ public class DomainSupportTest {
                     // 每15秒输出一次状态
                     long currentTime = System.currentTimeMillis();
                     if (currentTime - lastStatusTime >= 15000) {
-                        System.out.printf("\n📊 [状态] 已消费消息数: %d\n", messageCount);
-                        System.out.println("🔄 提醒：测试DR切换的两种方法");
+                        System.out.printf("\n[状态] 已消费消息数: %d\n", messageCount);
+                        System.out.println("提醒：测试DR切换的两种方法");
                         System.out.println("   方法1: 修改DNS指向新IP (推荐，原broker可继续运行)");
                         System.out.println("   方法2: 停止所有broker测试故障恢复");
                         System.out.println("   观察 [MetadataManagerImpl] 的主动/被动DNS检查日志\n");
@@ -111,10 +111,10 @@ public class DomainSupportTest {
                     
                 } catch (Exception e) {
                     pollFailureCount++;
-                    System.err.printf("⚠️  消费异常 (第%d次): %s\n", pollFailureCount, e.getMessage());
+                    System.err.printf(" 消费异常 (第%d次): %s\n", pollFailureCount, e.getMessage());
                     
                     if (pollFailureCount <= 3) {
-                        System.err.println("💡 这可能触发了DNS重解析，观察上方日志");
+                        System.err.println("这可能触发了DNS重解析，观察上方日志");
                         System.err.println("   如果是网络问题，客户端会自动重试和重解析");
                     }
                     
@@ -145,7 +145,8 @@ public class DomainSupportTest {
         config.setEnableAutoCommit(false);  // 手动提交，便于观察
         config.setMaxPollRecords(5);
         config.setHeartbeatIntervalMs(5000);
-        config.setMetadataRefreshIntervalMs(30000);
+        config.setMetadataRefreshIntervalMs(300000); // 改为5分钟，减少刷新频率
+        config.setFetchMaxWaitMs(3000); // fetch超时3秒，域名切换测试需要快速响应
         
         // 连接池配置
         config.setMetadataConnectionPoolSize(3);  // 较小的连接池便于测试
@@ -177,10 +178,10 @@ public class DomainSupportTest {
  *    [KafkaLiteConsumerImpl] 域名 localhost:9092 解析到 X 个IP: [...]
  *    
  *    主动检查（新功能）:
- *    [MetadataManagerImpl] 🔍 主动发现DNS变化:
+ *    [MetadataManagerImpl] 主动发现DNS变化:
  *    [MetadataManagerImpl]   当前IP列表: [old_ips]
  *    [MetadataManagerImpl]   新解析IP列表: [new_ips]
- *    [MetadataManagerImpl] ✅ 主动切换完成: [new_ips]
+ *    [MetadataManagerImpl] 主动切换完成: [new_ips]
  *    
  *    被动检查（兜底）:
  *    [MetadataManagerImpl] 所有broker都不可用，尝试重新解析DNS...

@@ -60,6 +60,7 @@ public class KafkaConsumerMonitorTest {
         config.setEnableAutoCommit(true);           // 启用自动提交
         config.setAutoCommitIntervalMs(5000);       // 自动提交间隔5秒
         config.setFetchMaxBytes(1024 * 1024);       // 单次最多拉取1MB数据
+        config.setFetchMaxWaitMs(3000);             // fetch超时3秒，监控测试需要稳定拉取
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
         config.setHeartbeatIntervalMs(1000);        // 心跳间隔1秒
@@ -78,11 +79,11 @@ public class KafkaConsumerMonitorTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("produce-test-topic"));
+            consumer.subscribe(Arrays.asList("performance-test-topic-3"));
 
-            System.out.println("🚀 开始消费消息...");
+            System.out.println("开始消费消息...");
             System.out.printf("📍 目标Broker: %s\n", broker);
-            System.out.printf("📊 监控端点: http://localhost:8084/metrics\n");
+            System.out.printf("监控端点: http://localhost:8084/metrics\n");
             System.out.printf("💚 健康检查: http://localhost:8084/health\n");
             System.out.println("按 Ctrl+C 停止消费");
             System.out.println("================================================================================");
@@ -201,11 +202,11 @@ public class KafkaConsumerMonitorTest {
             metricsServer = PrometheusMetricsServer.create(metricsCollector, 8084);
             metricsServer.start();
             
-            System.out.println("✅ Prometheus监控服务器已启动: http://localhost:8084/metrics");
+            System.out.println("Prometheus监控服务器已启动: http://localhost:8084/metrics");
             
         } catch (Exception e) {
-            System.err.printf("⚠️ 监控系统初始化失败: %s\n", e.getMessage());
-            System.err.println("⚠️ 测试将继续，但没有监控功能");
+            System.err.printf("监控系统初始化失败: %s\n", e.getMessage());
+            System.err.println("测试将继续，但没有监控功能");
         }
     }
     
@@ -238,7 +239,7 @@ public class KafkaConsumerMonitorTest {
                     double recentMPS = (count - lastCount) / ((now - lastTime) / 1000.0);
                     double recentMBPS = ((bytes - lastBytes) / (1024.0 * 1024.0)) / ((now - lastTime) / 1000.0);
                     
-                    System.out.printf("📊 [%.1fs] 消息: %d条(%.2fMB), 提交: %d次, 错误: %d, 平均MPS: %.2f, 最近MPS: %.2f, 吞吐量: %.2fMB/s%n", 
+                    System.out.printf("[%.1fs] 消息: %d条(%.2fMB), 提交: %d次, 错误: %d, 平均MPS: %.2f, 最近MPS: %.2f, 吞吐量: %.2fMB/s%n", 
                         elapsedSeconds,
                         count,
                         bytes / (1024.0 * 1024.0),
@@ -312,20 +313,20 @@ public class KafkaConsumerMonitorTest {
             double avgPollLatency = metricsCollector.getAverageLatency("consumer_poll_latency_ms");
             double p99PollLatency = metricsCollector.getP99Latency("consumer_poll_latency_ms");
             
-            System.out.printf("⏱️  Poll延迟: 平均=%.2fms, P99=%.2fms\n", avgPollLatency, p99PollLatency);
+            System.out.printf(" Poll延迟: 平均=%.2fms, P99=%.2fms\n", avgPollLatency, p99PollLatency);
             
             if (metricsCollector.getAverageLatency("consumer_commit_latency_ms") > 0) {
                 double avgCommitLatency = metricsCollector.getAverageLatency("consumer_commit_latency_ms");
                 double p99CommitLatency = metricsCollector.getP99Latency("consumer_commit_latency_ms");
-                System.out.printf("⏱️  Commit延迟: 平均=%.2fms, P99=%.2fms\n", avgCommitLatency, p99CommitLatency);
+                System.out.printf(" Commit延迟: 平均=%.2fms, P99=%.2fms\n", avgCommitLatency, p99CommitLatency);
             }
         }
         
         double errorRate = finalCount > 0 ? (finalErrors * 100.0) / finalCount : 0;
-        System.out.printf("⚠️  错误率: %.3f%%\n", errorRate);
+        System.out.printf(" 错误率: %.3f%%\n", errorRate);
         
         System.out.println("================================================================================");
-        System.out.println("📊 监控数据已保存到Prometheus，可通过以下方式查看:");
+        System.out.println("监控数据已保存到Prometheus，可通过以下方式查看:");
         System.out.println("  • 指标端点: http://localhost:8084/metrics");
         System.out.println("  • 建议配置Grafana进行可视化展示");
         System.out.println("================================================================================");

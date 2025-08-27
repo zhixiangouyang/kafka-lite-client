@@ -120,7 +120,7 @@ public class KafkaProducerMonitorTest {
                         lastCount = count;
                         lastTime = now;
                         
-                        System.out.printf("📊 [%.1fs] 时间: %.2f秒, 已发送: %d条消息(%.2fMB), 错误: %d条, 平均QPS: %.2f, 最近QPS: %.2f, 吞吐量: %.2fMB/s, 队列大小: %d%n", 
+                        System.out.printf("[%.1fs] 时间: %.2f秒, 已发送: %d条消息(%.2fMB), 错误: %d条, 平均QPS: %.2f, 最近QPS: %.2f, 吞吐量: %.2fMB/s, 队列大小: %d%n", 
                             elapsedSeconds,
                             elapsedSeconds, 
                             count,
@@ -131,7 +131,7 @@ public class KafkaProducerMonitorTest {
                             mbps,
                             producer.getQueueSize());
                         
-                        // 🎯 扩展延迟分布监控
+                        // 扩展延迟分布监控
                         System.out.printf("    📈 延迟分布: P50=%.1fms | P95=%.1fms | P99=%.1fms | P99.9=%.1fms | 平均=%.1fms | 最大=%.1fms%n",
                             producer.getProducerP50Latency(),
                             producer.getProducerP95Latency(), 
@@ -150,10 +150,10 @@ public class KafkaProducerMonitorTest {
             monitorThread.setDaemon(true);
             monitorThread.start();
 
-            System.out.println("🚀 开始生产者性能测试...");
+            System.out.println("开始生产者性能测试...");
             System.out.printf("📍 目标Broker: %s\n", broker);
-            System.out.printf("⏱️  测试时长: %.1f分钟\n", testDurationMs / 60000.0);
-            System.out.printf("📊 监控端点: http://localhost:8084/metrics\n");
+            System.out.printf(" 测试时长: %.1f分钟\n", testDurationMs / 60000.0);
+            System.out.printf("监控端点: http://localhost:8084/metrics\n");
             System.out.printf("💚 健康检查: http://localhost:8084/health\n");
             System.out.println("================================================================================");
 
@@ -196,7 +196,7 @@ public class KafkaProducerMonitorTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
                                 
                                 ProducerRecord record = new ProducerRecord(
-                                    "produce-test-topic", // 使用您指定的topic
+                                    "performance-test-topic-3", // 使用您指定的topic
                                     "key" + localIndex,
                                     messageValue
                                 );
@@ -257,18 +257,18 @@ public class KafkaProducerMonitorTest {
             System.out.println("\n================================================================================");
             System.out.println("🏁 最终测试结果:");
             System.out.println("================================================================================");
-            System.out.printf("⏱️  总测试时间: %.2f秒\n", totalSeconds);
+            System.out.printf(" 总测试时间: %.2f秒\n", totalSeconds);
             System.out.printf("📈 消息统计: 总发送=%d, 错误=%d, 成功率=%.3f%%\n", finalCount, finalErrors, 100.0 - errorRate);
-            System.out.printf("🚀 平均QPS: %.2f msg/s\n", finalQps);
+            System.out.printf("平均QPS: %.2f msg/s\n", finalQps);
             System.out.printf("📦 平均吞吐量: %.2f MB/s (总计: %.2f MB)\n", finalMbps, finalBytes / (1024.0 * 1024.0));
-            System.out.printf("⚠️  错误率: %.3f%%\n", errorRate);
-            System.out.printf("⏱️  最终P99延迟: %.2f ms\n", producer.getProducerP99Latency());
+            System.out.printf(" 错误率: %.3f%%\n", errorRate);
+            System.out.printf(" 最终P99延迟: %.2f ms\n", producer.getProducerP99Latency());
             
             // 更新最终指标
             updateFinalPrometheusMetrics(finalCount, finalErrors, finalBytes, finalQps, finalMbps, errorRate);
             
             System.out.println("================================================================================");
-            System.out.println("📊 监控数据已保存到Prometheus，可通过以下方式查看:");
+            System.out.println("监控数据已保存到Prometheus，可通过以下方式查看:");
             System.out.println("  • 指标端点: http://localhost:8084/metrics");
             System.out.println("  • 建议配置Grafana进行可视化展示");
             System.out.println("================================================================================");
@@ -309,11 +309,11 @@ public class KafkaProducerMonitorTest {
             metricsServer = PrometheusMetricsServer.create(metricsCollector, 8084);
             metricsServer.start();
             
-            System.out.println("✅ Prometheus监控服务器已启动: http://localhost:8084/metrics");
+            System.out.println("Prometheus监控服务器已启动: http://localhost:8084/metrics");
             
         } catch (Exception e) {
-            System.err.printf("⚠️ 监控系统初始化失败: %s\n", e.getMessage());
-            System.err.println("⚠️ 测试将继续，但没有监控功能");
+            System.err.printf("监控系统初始化失败: %s\n", e.getMessage());
+            System.err.println("测试将继续，但没有监控功能");
         }
     }
     
@@ -338,7 +338,7 @@ public class KafkaProducerMonitorTest {
             metricsCollector.setGauge("test.queue.size", producer.getQueueSize());
             metricsCollector.setGauge("test.producer.qps", producer.getProducerQPS());
             
-            // 🎯 扩展延迟指标
+            // 扩展延迟指标
             metricsCollector.setGauge("test.producer.p50.latency", producer.getProducerP50Latency());
             metricsCollector.setGauge("test.producer.p95.latency", producer.getProducerP95Latency());
             metricsCollector.setGauge("test.producer.p99.latency", producer.getProducerP99Latency());

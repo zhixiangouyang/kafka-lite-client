@@ -27,12 +27,12 @@ public class DebugFetchIssue {
         );
         
         try {
-            System.out.println("=== 🔍 开始调试Fetch问题 ===");
+            System.out.println("=== 开始调试Fetch问题 ===");
             
             // 订阅topic
             consumer.subscribe(Arrays.asList("ouyangTest6"));
             
-            System.out.println("✅ 订阅完成，开始调试poll...");
+            System.out.println("订阅完成，开始调试poll...");
             
             // 进行几次poll来看具体问题
             for (int i = 0; i < 3; i++) {
@@ -57,14 +57,14 @@ public class DebugFetchIssue {
                     }
                     break;  // 拉取到消息就退出
                 } else {
-                    System.out.println("❌ 没有拉取到消息");
+                    System.out.println("没有拉取到消息");
                 }
                 
                 Thread.sleep(1000);  // 等待1秒再试
             }
             
         } catch (Exception e) {
-            System.err.println("❌ 调试过程中发生错误: " + e.getMessage());
+            System.err.println("调试过程中发生错误: " + e.getMessage());
             e.printStackTrace();
         } finally {
             consumer.close();

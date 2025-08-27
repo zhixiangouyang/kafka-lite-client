@@ -33,8 +33,8 @@ public class OffsetManager {
     public void setCoordinatorSocket(KafkaSingleSocketClient socket) {
         this.coordinatorSocket = socket;
     }
-    
-    // 🔧 新增：更新bootstrap servers，用于集群切换
+
+    // 新增：更新bootstrap servers，用于集群切换
     public synchronized void updateBootstrapServers(List<String> newBootstrapServers) {
         System.out.printf("[OffsetManager] 更新bootstrap servers: %s -> %s\n", 
             this.bootstrapServers, newBootstrapServers);

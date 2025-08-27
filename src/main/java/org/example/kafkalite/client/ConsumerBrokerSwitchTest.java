@@ -62,6 +62,7 @@ public class ConsumerBrokerSwitchTest {
         config.setEnableAutoCommit(true);           // 启用自动提交
         config.setAutoCommitIntervalMs(5000);       // 自动提交间隔5秒
         config.setFetchMaxBytes(1024 * 1024);       // 单次最多拉取1MB数据
+        config.setFetchMaxWaitMs(2000);             // fetch超时2秒，broker切换测试需要快速检测
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
         config.setHeartbeatIntervalMs(3000);        // 心跳间隔3秒
@@ -129,7 +130,7 @@ public class ConsumerBrokerSwitchTest {
                     }
                     
                 } catch (Exception e) {
-                    System.err.printf("⚠️  消费过程中发生异常: %s\n", e.getMessage());
+                    System.err.printf(" 消费过程中发生异常: %s\n", e.getMessage());
                     System.err.println("这可能是broker切换引起的，客户端会自动重试...");
                     
                     // 短暂休息后继续

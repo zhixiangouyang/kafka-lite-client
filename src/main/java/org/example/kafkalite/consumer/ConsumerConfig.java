@@ -5,6 +5,7 @@ public class ConsumerConfig {
     private long autoCommitIntervalMs = 5000;
     private int maxPollRecords = 500;
     private int fetchMaxBytes = 1048576;
+    private int fetchMaxWaitMs = 5000; // fetch请求最大等待时间，默认5秒
     private int maxRetries = 3;
     private long retryBackoffMs = 100;
     private long heartbeatIntervalMs = 3000;
@@ -54,6 +55,14 @@ public class ConsumerConfig {
 
     public void setFetchMaxBytes(int fetchMaxBytes) {
         this.fetchMaxBytes = fetchMaxBytes;
+    }
+
+    public int getFetchMaxWaitMs() {
+        return fetchMaxWaitMs;
+    }
+
+    public void setFetchMaxWaitMs(int fetchMaxWaitMs) {
+        this.fetchMaxWaitMs = fetchMaxWaitMs;
     }
 
     public int getMaxRetries() {
