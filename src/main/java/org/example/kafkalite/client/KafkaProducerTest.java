@@ -41,8 +41,8 @@ public class KafkaProducerTest {
 //        String broker = "10.251.183.199:27462";
 
 //        cluster1
-//        String broker = "10.251.176.5:19092";
-        String broker = "10.251.184.8:19092";
+        String broker = "10.251.176.5:19092";
+//        String broker = "10.251.184.8:19092";
 
 //        cluster2
 //        String broker = "10.251.176.130:19092";
@@ -180,8 +180,8 @@ public class KafkaProducerTest {
 //                                    "ouyangTest6",
 //                                    "performance-test-topic",
 //                                    "broker-test-topic-5",
-                                    "cluster-test-topic-2",
-//                                    "rebalance-test-topic-4",
+//                                    "cluster-test-topic-2",
+                                    "rebalance-test-topic-6",
                                     "key" + localIndex,
                                     messageValue
                                 );

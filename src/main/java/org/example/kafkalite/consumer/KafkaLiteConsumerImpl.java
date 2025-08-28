@@ -363,41 +363,94 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                     return allRecords;
                 }
             }
-            for (PartitionAssignment assignment : assignments) {
-                if (allRecords.size() >= config.getMaxPollRecords()) {
-                    break;
-                }
+            
+            // 修复：确保遍历所有分区，不要过早退出
+            System.out.printf("[Poll] 开始遍历 %d 个分区分配\n", assignments.size());
+            
+            // 修复：计算每个分区的记录配额，确保所有分区都有机会被处理
+            int maxRecordsPerPartition = Math.max(1, config.getMaxPollRecords() / assignments.size());
+            int remainingGlobalQuota = config.getMaxPollRecords();
+            System.out.printf("[Poll] 每个分区最大记录数: %d, 全局剩余配额: %d\n", 
+                maxRecordsPerPartition, remainingGlobalQuota);
+            
+            for (int i = 0; i < assignments.size(); i++) {
+                PartitionAssignment assignment = assignments.get(i);
                 String topic = assignment.getTopic();
                 int partition = assignment.getPartition();
+                
+                System.out.printf("[Poll] 处理分区 %d/%d: topic=%s, partition=%d, 已拉取记录数=%d, 剩余配额=%d\n", 
+                    i + 1, assignments.size(), topic, partition, allRecords.size(), remainingGlobalQuota);
+                
+                // 修复：检查全局配额，但给每个分区至少1条消息的机会
+                if (remainingGlobalQuota <= 0) {
+                    System.out.printf("[Poll] 全局配额已用完，停止处理剩余 %d 个分区\n", assignments.size() - i);
+                    break;
+                }
+                
+                // 为当前分区计算可用的记录数配额
+                int partitionQuota = Math.min(maxRecordsPerPartition, remainingGlobalQuota);
+                // 如果是最后一个分区，可以使用所有剩余配额
+                if (i == assignments.size() - 1) {
+                    partitionQuota = remainingGlobalQuota;
+                }
+                
+                System.out.printf("[Poll] 分区 %s:%d 的配额: %d 条记录\n", topic, partition, partitionQuota);
+                
                 Map<Integer, String> partitionLeaders = topicPartitionLeaders.get(topic);
-                if (partitionLeaders == null) continue;
+                if (partitionLeaders == null) {
+                    System.out.printf("[Poll] 分区 %s:%d 无leader信息，跳过\n", topic, partition);
+                    continue;
+                }
                 String broker = partitionLeaders.get(partition);
-                if (broker == null) continue;
+                if (broker == null) {
+                    System.out.printf("[Poll] 分区 %s:%d 无broker信息，跳过\n", topic, partition);
+                    continue;
+                }
                 String[] parts = broker.split(":");
                 String host = parts[0];
                 int port = Integer.parseInt(parts[1]);
                 long offset = offsetManager.getOffset(topic, partition);
+                
+                // 修复：将重试逻辑包装在try-catch中，避免单个分区失败影响其他分区
+                boolean fetchSuccess = false;
                 int retryCount = 0;
-                while (retryCount < config.getMaxRetries()) {
+                int partitionRecordsFetched = 0;
+                
+                while (retryCount < config.getMaxRetries() && !fetchSuccess) {
                     try {
-                        System.out.printf("[Poll] 拉取参数: topic=%s, partition=%d, offset=%d, broker=%s:%d%n",
-                            topic, partition, offset, host, port);
+                        System.out.printf("[Poll] 拉取参数: topic=%s, partition=%d, offset=%d, broker=%s:%d, retry=%d, 配额=%d%n",
+                            topic, partition, offset, host, port, retryCount, partitionQuota);
+
+                        // 修复：根据分区配额调整fetchMaxBytes，避免单个分区拉取过多数据
+                        int adjustedFetchMaxBytes = Math.min(config.getFetchMaxBytes(), 
+                            partitionQuota * 1024); // 假设每条消息平均1KB
 
                         ByteBuffer fetchRequest = FetchRequestBuilder.build(
                             clientId,
                             topic,
                             partition,
                             offset,
-                            config.getFetchMaxBytes(),
+                            adjustedFetchMaxBytes,
                             1,
                             config.getFetchMaxWaitMs()  // 使用配置的等待时间
                         );
                         ByteBuffer response = KafkaSocketClient.sendAndReceive(host, port, fetchRequest);
                         List<ConsumerRecord> records = FetchResponseParser.parse(response);
+                        
+                        // 修复：限制单个分区返回的记录数，确保不超过分区配额
+                        if (records.size() > partitionQuota) {
+                            System.out.printf("[Poll] 分区 %s:%d 返回 %d 条记录，超过配额 %d，截取前 %d 条\n", 
+                                topic, partition, records.size(), partitionQuota, partitionQuota);
+                            records = records.subList(0, partitionQuota);
+                        }
+                        
+                        partitionRecordsFetched = records.size();
+                        
                         if (!records.isEmpty()) {
                             long firstOffset = records.get(0).getOffset();
                             long lastOffset = records.get(records.size() - 1).getOffset();
-                            System.out.printf("[Poll] 拉取到%d条消息, offset范围: [%d, %d]\n", records.size(), firstOffset, lastOffset);
+                            System.out.printf("[Poll] 从分区 %s:%d 拉取到%d条消息 (配额:%d), offset范围: [%d, %d]\n", 
+                                topic, partition, records.size(), partitionQuota, firstOffset, lastOffset);
                             System.out.printf("[DEBUG] poll调用updateOffset: topic=%s, partition=%d, offset=%d\n", topic, partition, lastOffset+1);
                             offsetManager.updateOffset(topic, partition, lastOffset + 1);
                             
@@ -408,12 +461,12 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                             metricsCollector.incrementCounter(MetricsCollector.METRIC_CONSUMER_FETCH_SUCCESS, labels);
                             
                             // 记录拉取的消息数量
-                            for (int i = 0; i < records.size(); i++) {
+                            for (int j = 0; j < records.size(); j++) {
                                 metricsCollector.incrementCounter("consumer.records.fetched");
                             }
                             
                         } else {
-                            System.out.printf("[Poll] topic=%s, partition=%d, fetched=0%n", topic, partition);
+                            System.out.printf("[Poll] 从分区 %s:%d 拉取到0条消息\n", topic, partition);
                             
                             // 指标埋点: 空拉取
                             Map<String, String> labels = new HashMap<>();
@@ -422,9 +475,15 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                             metricsCollector.incrementCounter("consumer.fetch.empty", labels);
                         }
                         allRecords.addAll(records);
-                        break;
+                        remainingGlobalQuota -= partitionRecordsFetched;
+                        fetchSuccess = true; // 标记拉取成功
+                        
+                        System.out.printf("[Poll] 分区 %s:%d 处理完成，本次拉取 %d 条，剩余全局配额 %d\n", 
+                            topic, partition, partitionRecordsFetched, remainingGlobalQuota);
+                        
                     } catch (Exception e) {
-                        System.err.println("[Poll] 拉取异常: " + e.getMessage());
+                        System.err.printf("[Poll] 从分区 %s:%d 拉取异常 (重试 %d/%d): %s\n", 
+                            topic, partition, retryCount + 1, config.getMaxRetries(), e.getMessage());
                         
                         // 指标埋点: 拉取失败
                         Map<String, String> labels = new HashMap<>();
@@ -435,22 +494,28 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                         
                         retryCount++;
                         if (retryCount >= config.getMaxRetries()) {
-                            System.err.println("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries");
+                            System.err.printf("[Poll] 分区 %s:%d 在 %d 次重试后仍然失败，跳过该分区继续处理其他分区\n", 
+                                topic, partition, config.getMaxRetries());
                             // 重试失败后刷新元数据 - 错误触发
+                            try {
                             metadataManager.refreshMetadata(topic, true, false);
                             topicPartitionLeaders.put(topic, metadataManager.getPartitionLeaders(topic));
+                            } catch (Exception metaEx) {
+                                System.err.printf("[Poll] 刷新元数据也失败: %s\n", metaEx.getMessage());
+                            }
                             
                             // 指标埋点: 最终拉取失败
                             metricsCollector.incrementCounter("consumer.fetch.final_failure", labels);
                             
-                            // 重试失败后抛出异常，而不是静默失败
-                            throw new RuntimeException("Failed to fetch from topic=" + topic + ", partition=" + partition + " after " + config.getMaxRetries() + " retries", e);
+                            // 修复：不要抛出异常，而是跳过该分区继续处理其他分区
+                            break; // 跳出重试循环，继续处理下一个分区
                         } else {
                             try {
                                 Thread.sleep(config.getRetryBackoffMs());
                             } catch (InterruptedException ie) {
                                 Thread.currentThread().interrupt();
-                                throw new RuntimeException("Interrupted while retrying", ie);
+                                System.err.printf("[Poll] 重试等待被中断，跳过分区 %s:%d\n", topic, partition);
+                                break; // 跳出重试循环
                             }
                         }
                     }
@@ -459,7 +524,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         } catch (Exception e) {
             System.err.println("[Poll] 拉取过程中发生异常: " + e.getMessage());
             e.printStackTrace();
-            // 不要重新抛出异常，而是返回空结果，让消费者继续运行
+            // 不要重新抛出异常，而是返回已拉取到的结果，让消费者继续运行
         } finally {
             long endTime = System.currentTimeMillis();
             long pollLatency = endTime - startTime;
@@ -476,7 +541,8 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
                 metricsCollector.incrementCounter("consumer.poll.empty");
             }
             
-            System.out.printf("[Poll] 本次总共拉取消息数: %d\n", allRecords.size());
+            System.out.printf("[Poll] 本次总共从 %d 个分区拉取消息数: %d\n", 
+                assignments != null ? assignments.size() : 0, allRecords.size());
             System.out.printf("[DEBUG] poll finally, thread=%s, enableAutoCommit=%s\n", Thread.currentThread().getName(), config.isEnableAutoCommit());
         }
         

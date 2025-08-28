@@ -74,13 +74,19 @@ public class KafkaSocketClient {
     
     private static void readFully(InputStream in, byte[] buf, int offset, int len) throws IOException {
         int totalRead = 0;
+        long startTime = System.currentTimeMillis();
         while (totalRead < len) {
             int read = in.read(buf, offset + totalRead, len - totalRead);
             if (read == -1) {
                 throw new IOException("End of stream reached after reading " + totalRead + " bytes, expected " + len + " bytes");
-        }
+            }
             totalRead += read;
-    }
+            
+            // 只添加这个超时检查，避免无限阻塞
+            if (System.currentTimeMillis() - startTime > 30000) {
+                throw new IOException("Read timeout after 30s, read " + totalRead + "/" + len + " bytes");
+            }
+        }
     }
     
     /**

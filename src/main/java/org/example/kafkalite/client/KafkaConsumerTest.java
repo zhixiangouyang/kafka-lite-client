@@ -8,6 +8,8 @@ import org.example.kafkalite.consumer.KafkaLiteConsumerImpl;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Map;
+import java.util.HashMap;
 
 public class KafkaConsumerTest {
     private static volatile KafkaLiteConsumer consumer;
@@ -50,14 +52,14 @@ public class KafkaConsumerTest {
 
         // 3. 创建消费者实例
         consumer = new KafkaLiteConsumerImpl(
-            "rebalance-test-group-7",                    // 消费者组ID
+            "rebalance-test-group-1",                    // 消费者组ID
             Arrays.asList(broker),           // Kafka集群地址
             config                           // 配置
         );
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("rebalance-test-topic-4"));
+            consumer.subscribe(Arrays.asList("rebalance-test-topic-6"));
 //            consumer.subscribe(Arrays.asList("rebalance-test-topic"));
 
             System.out.println("开始消费消息...");
@@ -69,14 +71,24 @@ public class KafkaConsumerTest {
                 List<ConsumerRecord> records = consumer.poll(1000);
                 
                 // 打印消费到的消息
-                for (ConsumerRecord record : records) {
-                    // System.out.printf("收到消息: topic=%s, partition=%d, offset=%d, key=%s, value=%s%n",
-                    //     record.getTopic(),
-                    //     record.getPartition(),
-                    //     record.getOffset(),
-                    //     record.getKey(),
-                    //     record.getValue()
-                    // );
+//                for (ConsumerRecord record : records) {
+//                    System.out.printf("收到消息: topic=%s, partition=%d, offset=%d, key=%s, value=%s%n",
+//                        record.getTopic(),
+//                        record.getPartition(),
+//                        record.getOffset(),
+//                        record.getKey(),
+//                        record.getValue()
+//                    );
+//                }
+                
+                // 新增：统计各分区消费情况
+                if (!records.isEmpty()) {
+                    Map<Integer, Integer> partitionCounts = new HashMap<>();
+                    for (ConsumerRecord record : records) {
+                        partitionCounts.put(record.getPartition(), 
+                            partitionCounts.getOrDefault(record.getPartition(), 0) + 1);
+                    }
+                    System.out.printf("本次poll各分区消息统计: %s%n", partitionCounts);
                 }
 
                 // 如果是手动提交，在这里提交
