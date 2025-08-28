@@ -47,6 +47,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         // 共享 MetadataManager，避免重复创建连接池
         this.coordinator.setMetadataManager(this.metadataManager);
         this.offsetManager.setCoordinator(this.coordinator);
+        this.offsetManager.setConfig(config); // 新增：设置配置
         // coordinatorSocket在coordinator.initializeGroup()后才会被创建
     }
     
@@ -73,6 +74,7 @@ public class KafkaLiteConsumerImpl implements KafkaLiteConsumer {
         // 共享 MetadataManager，避免重复创建连接池
         this.coordinator.setMetadataManager(this.metadataManager);
         this.offsetManager.setCoordinator(this.coordinator);
+        this.offsetManager.setConfig(config); // 新增：设置配置
         
         // 设置bootstrap servers变化回调，处理DNS重解析后的连接更新
         if (this.metadataManager instanceof MetadataManagerImpl) {

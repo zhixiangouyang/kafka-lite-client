@@ -6,6 +6,8 @@ import org.example.kafkalite.protocol.OffsetCommitRequestBuilder;
 import org.example.kafkalite.protocol.OffsetCommitResponseParser;
 import org.example.kafkalite.protocol.OffsetFetchRequestBuilder;
 import org.example.kafkalite.protocol.OffsetFetchResponseParser;
+import org.example.kafkalite.protocol.ListOffsetsRequestBuilder;
+import org.example.kafkalite.protocol.ListOffsetsResponseParser;
 
 import java.nio.ByteBuffer;
 import java.util.Collections;
@@ -20,14 +22,21 @@ public class OffsetManager {
     private final Map<String, Map<Integer, Long>> offsets = new HashMap<>();
     private ConsumerCoordinator coordinator;
     private KafkaSingleSocketClient coordinatorSocket;
+    private ConsumerConfig config; // 新增：保存配置引用
 
     public OffsetManager(String groupId, List<String> bootstrapServers) {
         this.groupId = groupId;
         this.bootstrapServers = bootstrapServers;
+        this.config = null; // 将通过setConfig设置
     }
 
     public void setCoordinator(ConsumerCoordinator coordinator) {
         this.coordinator = coordinator;
+    }
+    
+    // 新增：设置配置
+    public void setConfig(ConsumerConfig config) {
+        this.config = config;
     }
 
     public void setCoordinatorSocket(KafkaSingleSocketClient socket) {
@@ -47,7 +56,7 @@ public class OffsetManager {
         this.offsets.clear();
     }
 
-    // 获取当前offset - 修复重复消费问题
+    // 获取当前offset - 支持auto.offset.reset策略
     public synchronized long getOffset(String topic, int partition) {
         Long offset = offsets.getOrDefault(topic, Collections.emptyMap()).get(partition);
         
@@ -59,18 +68,14 @@ public class OffsetManager {
         }
         
         // 2. 如果offset为null或-1，表示该消费者组在此分区没有committed offset
-        // 根据策略决定从哪里开始消费
+        // 根据auto.offset.reset策略决定从哪里开始消费
         if (offset == null || offset == -1) {
             System.out.printf("[OffsetManager] 分区无已提交offset: topic=%s, partition=%d, offset=%s\n", 
                 topic, partition, offset);
             
-            // 这里可以配置策略：
-            // - 如果想从最新开始（跳过历史消息）：可以调用ListOffsets获取latest
-            // - 如果想从最早开始（消费所有历史消息）：返回0或调用ListOffsets获取earliest
-            // - 当前简单策略：从0开始消费（适合大多数情况）
-            
-            long startOffset = 0L; // 简单策略：从头开始
-            System.out.printf("[OffsetManager] 使用起始offset: topic=%s, partition=%d, offset=%d\n", 
+            // 使用auto.offset.reset策略获取起始offset
+            long startOffset = getOffsetByResetStrategy(topic, partition);
+            System.out.printf("[OffsetManager] 根据auto.offset.reset策略获取offset: topic=%s, partition=%d, offset=%d\n", 
                 topic, partition, startOffset);
             
             // 更新到本地缓存
@@ -79,9 +84,9 @@ public class OffsetManager {
         }
         
         // 3. 其他情况（不应该发生）
-        System.out.printf("[OffsetManager] 未预期的offset值: topic=%s, partition=%d, offset=%d, 使用0\n", 
+        System.out.printf("[OffsetManager] 未预期的offset值: topic=%s, partition=%d, offset=%d, 使用fallback策略\n", 
             topic, partition, offset);
-        return 0L;
+        return getOffsetByResetStrategy(topic, partition);
     }
 
     // 更新 offset
@@ -91,6 +96,110 @@ public class OffsetManager {
             offsets.put(topic, new HashMap<>());
         }
         offsets.get(topic).put(partition, offset);
+    }
+    
+    /**
+     * 根据auto.offset.reset策略获取起始offset
+     * @param topic 主题名称
+     * @param partition 分区号
+     * @return 起始offset
+     */
+    private long getOffsetByResetStrategy(String topic, int partition) {
+        String resetStrategy = config != null ? config.getAutoOffsetReset() : "earliest";
+        System.out.printf("[OffsetManager] 应用auto.offset.reset策略: %s, topic=%s, partition=%d\n", 
+            resetStrategy, topic, partition);
+        
+        switch (resetStrategy.toLowerCase()) {
+            case "earliest":
+                return getOffsetByListOffsets(topic, partition, ListOffsetsRequestBuilder.EARLIEST_TIMESTAMP);
+            case "latest":
+                return getOffsetByListOffsets(topic, partition, ListOffsetsRequestBuilder.LATEST_TIMESTAMP);
+            case "none":
+                throw new RuntimeException(String.format(
+                    "No offset found for topic=%s, partition=%d and auto.offset.reset=none", 
+                    topic, partition));
+            default:
+                System.err.printf("[OffsetManager] 未知的auto.offset.reset策略: %s, 使用earliest作为fallback\n", resetStrategy);
+                return getOffsetByListOffsets(topic, partition, ListOffsetsRequestBuilder.EARLIEST_TIMESTAMP);
+        }
+    }
+    
+    /**
+     * 使用ListOffsets API获取指定时间戳的offset
+     * @param topic 主题名称
+     * @param partition 分区号
+     * @param timestamp 时间戳 (EARLIEST_TIMESTAMP或LATEST_TIMESTAMP)
+     * @return offset值
+     */
+    private long getOffsetByListOffsets(String topic, int partition, long timestamp) {
+        try {
+            System.out.printf("[OffsetManager] 调用ListOffsets API: topic=%s, partition=%d, timestamp=%d\n", 
+                topic, partition, timestamp);
+            
+            // 构造ListOffsets请求
+            Map<String, Integer[]> topicPartitions = new HashMap<>();
+            topicPartitions.put(topic, new Integer[]{partition});
+            
+            String clientId = coordinator != null ? coordinator.getClientId() : "kafka-lite";
+            ByteBuffer request = ListOffsetsRequestBuilder.build(
+                clientId, topicPartitions, timestamp, 1);
+            
+            // 发送请求
+            ByteBuffer response;
+            if (coordinator != null && coordinator.getCoordinatorSocket() != null) {
+                // 优先使用coordinator连接
+                System.out.printf("[OffsetManager] 通过coordinator获取ListOffsets: %s:%d\n", 
+                    coordinator.getCoordinatorSocket().getHost(), coordinator.getCoordinatorSocket().getPort());
+                response = coordinator.getCoordinatorSocket().sendAndReceive(request);
+            } else {
+                // 回退到使用bootstrap server
+                String brokerAddress = bootstrapServers.get(0);
+                String[] parts = brokerAddress.split(":");
+                String host = parts[0];
+                int port = Integer.parseInt(parts[1]);
+                System.out.printf("[OffsetManager] 通过bootstrap server获取ListOffsets: %s:%d\n", host, port);
+                response = KafkaSocketClient.sendAndReceive(host, port, request);
+            }
+            
+            // 解析响应
+            Map<String, Map<Integer, ListOffsetsResponseParser.OffsetInfo>> result = 
+                ListOffsetsResponseParser.parse(response);
+            
+            ListOffsetsResponseParser.OffsetInfo offsetInfo = result
+                .getOrDefault(topic, Collections.emptyMap())
+                .get(partition);
+            
+            if (offsetInfo != null && offsetInfo.getErrorCode() == 0) {
+                long offset = offsetInfo.getOffset();
+                System.out.printf("[OffsetManager] ListOffsets成功: topic=%s, partition=%d, timestamp=%d -> offset=%d\n", 
+                    topic, partition, timestamp, offset);
+                return offset;
+            } else {
+                short errorCode = offsetInfo != null ? offsetInfo.getErrorCode() : -1;
+                System.err.printf("[OffsetManager] ListOffsets失败: topic=%s, partition=%d, errorCode=%d\n", 
+                    topic, partition, errorCode);
+                // Fallback to 0 for earliest, or throw exception for latest
+                if (timestamp == ListOffsetsRequestBuilder.EARLIEST_TIMESTAMP) {
+                    System.out.printf("[OffsetManager] ListOffsets失败，earliest策略fallback到offset=0\n");
+                    return 0L;
+                } else {
+                    throw new RuntimeException(String.format(
+                        "Failed to get latest offset for topic=%s, partition=%d, errorCode=%d", 
+                        topic, partition, errorCode));
+                }
+            }
+            
+        } catch (Exception e) {
+            System.err.printf("[OffsetManager] ListOffsets异常: topic=%s, partition=%d, timestamp=%d, 错误=%s\n", 
+                topic, partition, timestamp, e.getMessage());
+            // Fallback策略：earliest返回0，latest抛异常
+            if (timestamp == ListOffsetsRequestBuilder.EARLIEST_TIMESTAMP) {
+                System.out.printf("[OffsetManager] ListOffsets异常，earliest策略fallback到offset=0\n");
+                return 0L;
+            } else {
+                throw new RuntimeException("Failed to get latest offset due to exception", e);
+            }
+        }
     }
 
     // 同步提交

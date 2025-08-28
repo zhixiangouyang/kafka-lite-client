@@ -46,7 +46,7 @@ public class DomainSupportConsumerTest {
      */
     private static void testDomainSupport() {
         String kafkaDomain = "kafka.kafka_dr_1_noacl_test.test.mq.shopee.io:19092";  // 可以改为您的实际域名
-        String groupId = "domain-support-test-group-1"; // 使用动态group ID避免历史offset影响
+        String groupId = "domain-support-test-group-2"; // 使用动态group ID避免历史offset影响
         ConsumerConfig config = createTestConfig();
         
         try {
@@ -144,7 +144,7 @@ public class DomainSupportConsumerTest {
         ConsumerConfig config = new ConsumerConfig();
         config.setEnableAutoCommit(true);  // 手动提交，便于观察
         config.setHeartbeatIntervalMs(3000);
-        config.setMetadataRefreshIntervalMs(300000); // 改为5分钟，减少刷新频率
+        config.setMetadataRefreshIntervalMs(60000 * 10); // 改为5分钟，减少刷新频率
         config.setFetchMaxWaitMs(3000); // fetch超时3秒，域名切换测试需要快速响应
         
         // 连接池配置

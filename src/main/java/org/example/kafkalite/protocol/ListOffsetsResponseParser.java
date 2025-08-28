@@ -30,7 +30,7 @@ public class ListOffsetsResponseParser {
     }
     
     /**
-     * 解析ListOffsets响应 (Version: 1)
+     * 解析ListOffsets响应 (Version: 3)
      * @param buffer 响应数据
      * @return topic -> partition -> OffsetInfo 映射
      */
@@ -43,6 +43,10 @@ public class ListOffsetsResponseParser {
             
             // 读取correlationId
             int correlationId = buffer.getInt();
+            
+            // 读取throttle_time_ms (Version 3新增)
+            int throttleTimeMs = buffer.getInt();
+            System.out.printf("[ListOffsetsResponseParser] throttle_time_ms=%d\n", throttleTimeMs);
             
             // 读取topics数组
             int topicCount = buffer.getInt();

@@ -24,6 +24,9 @@ public class ConsumerConfig {
     private Long dnsTtlMs = 300000L; // DNS TTL: 5分钟
     private Long healthCheckIntervalMs = 30000L; // 健康检查间隔: 30秒
     private Integer maxRetryCount = 3; // 最大重试次数
+    
+    // 新增：auto.offset.reset策略配置
+    private String autoOffsetReset = "earliest"; // earliest, latest, none
 
     public boolean isEnableAutoCommit() {
         return enableAutoCommit;
@@ -162,5 +165,30 @@ public class ConsumerConfig {
     
     public void setMaxRetryCount(Integer maxRetryCount) {
         this.maxRetryCount = maxRetryCount;
+    }
+    
+    // 新增：auto.offset.reset相关getter/setter
+    public String getAutoOffsetReset() {
+        return autoOffsetReset;
+    }
+    
+    public void setAutoOffsetReset(String autoOffsetReset) {
+        this.autoOffsetReset = autoOffsetReset;
+    }
+    
+    /**
+     * 设置auto.offset.reset策略（枚举版本，提供IDE智能提示）
+     * @param strategy offset重置策略
+     */
+    public void setAutoOffsetReset(OffsetResetStrategy strategy) {
+        this.autoOffsetReset = strategy.getValue();
+    }
+    
+    /**
+     * 获取auto.offset.reset策略的枚举值
+     * @return offset重置策略枚举
+     */
+    public OffsetResetStrategy getAutoOffsetResetStrategy() {
+        return OffsetResetStrategy.fromValue(autoOffsetReset);
     }
 } 
