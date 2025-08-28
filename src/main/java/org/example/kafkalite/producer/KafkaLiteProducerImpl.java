@@ -6,11 +6,13 @@ import org.example.kafkalite.metadata.MetadataManagerImpl;
 import org.example.kafkalite.monitor.MetricsCollector;
 import org.example.kafkalite.protocol.KafkaRecordEncoder;
 import org.example.kafkalite.protocol.ProduceRequestBuilder;
+import org.example.kafkalite.protocol.ProduceResponseParser;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -385,8 +387,9 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                     }
                     
                 response = connectionPool.sendAndReceive(request);
-                    System.out.printf("成功发送 %d 条消息到 topic=%s, partition=%d%s%n", 
-                        batch.size(), topic, partition, retryCount > 0 ? " (重试成功)" : "");
+                    
+                    // 解析并处理响应
+                    handleProduceResponse(response, topic, partition, batch, retryCount);
                 
                 // 指标埋点: 批次发送成功
                 metricsCollector.incrementCounter("producer.batch.send.success", labels);
@@ -419,8 +422,6 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                     }
                 }
             }
-            
-            // 这里可以解析响应，处理错误等
             
         } catch (Exception e) {
             // 发生错误，尝试重试
@@ -478,6 +479,140 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         } else {
             // 压缩版本（修复后）
             return KafkaRecordEncoder.encodeBatchMessagesOptimized(records, compressionType);
+        }
+    }
+    
+    /**
+     * 处理ProduceResponse响应
+     * @param response 响应数据
+     * @param topic 主题名称
+     * @param partition 分区号
+     * @param batch 发送的消息批次
+     * @param retryCount 重试次数
+     */
+    private void handleProduceResponse(ByteBuffer response, String topic, int partition, 
+                                     List<ProducerRecord> batch, int retryCount) {
+        try {
+            // 解析响应
+            ProduceResponseParser.ProduceResponse produceResponse = ProduceResponseParser.parse(response);
+            
+            // 获取当前topic的响应
+            ProduceResponseParser.TopicResponse topicResponse = produceResponse.getTopicResponse(topic);
+            if (topicResponse == null) {
+                System.err.printf("Producer] 响应中未找到topic: %s\n", topic);
+                return;
+            }
+            
+            // 获取当前分区的响应
+            ProduceResponseParser.PartitionResponse partitionResponse = topicResponse.getPartitionResponse(partition);
+            if (partitionResponse == null) {
+                System.err.printf("[Producer] 响应中未找到分区: topic=%s, partition=%d\n", topic, partition);
+                return;
+            }
+            
+            // 检查是否成功
+            if (partitionResponse.isSuccess()) {
+                // 成功的情况
+                System.out.printf("[Producer] 成功发送 %d 条消息到 topic=%s, partition=%d, baseOffset=%d%s\n",
+                    batch.size(), topic, partition, partitionResponse.getBaseOffset(),
+                    retryCount > 0 ? " (重试成功)" : "");
+                
+                // 如果有logAppendTime信息，也输出
+                if (partitionResponse.getLogAppendTimeMs() != -1L) {
+                    System.out.printf("[Producer] 日志追加时间: %d ms\n", partitionResponse.getLogAppendTimeMs());
+                }
+                
+                // 如果有throttle时间，记录警告
+                if (produceResponse.getThrottleTimeMs() > 0) {
+                    System.out.printf("[Producer] Broker节流: %dms\n", produceResponse.getThrottleTimeMs());
+                }
+                
+                // 指标埋点: 记录成功的baseOffset
+                Map<String, String> labels = new HashMap<>();
+                labels.put("topic", topic);
+                labels.put("partition", String.valueOf(partition));
+                metricsCollector.setGauge("producer.last_base_offset", partitionResponse.getBaseOffset(), labels);
+                
+            } else {
+                // 失败的情况
+                short errorCode = partitionResponse.getErrorCode();
+                String errorDesc = partitionResponse.getErrorDescription();
+                
+                System.err.printf("[Producer] 发送失败: topic=%s, partition=%d, errorCode=%d[%s], baseOffset=%d\n",
+                    topic, partition, errorCode, errorDesc, partitionResponse.getBaseOffset());
+                
+                // 指标埋点: 记录错误类型
+                Map<String, String> errorLabels = new HashMap<>();
+                errorLabels.put("topic", topic);
+                errorLabels.put("partition", String.valueOf(partition));
+                errorLabels.put("error_code", String.valueOf(errorCode));
+                errorLabels.put("error_desc", errorDesc);
+                metricsCollector.incrementCounter("producer.send.error_by_type", errorLabels);
+                
+                // 根据错误类型决定是否应该重试
+                boolean shouldRetry = shouldRetryForError(errorCode);
+                if (!shouldRetry) {
+                    System.err.printf("[Producer] 错误不可重试: %s, 将抛出异常\n", errorDesc);
+                    throw new RuntimeException(String.format(
+                        "Produce失败，不可重试的错误: topic=%s, partition=%d, errorCode=%d[%s]", 
+                        topic, partition, errorCode, errorDesc));
+                } else if (retryCount > 0) {
+                    System.out.printf("🔄 [Producer] 可重试错误: %s, 当前重试=%d\n", errorDesc, retryCount);
+                }
+            }
+            
+        } catch (Exception e) {
+            System.err.printf("Producer] 解析ProduceResponse失败: topic=%s, partition=%d, 错误=%s\n",
+                topic, partition, e.getMessage());
+            e.printStackTrace();
+            
+            // 指标埋点: 解析失败
+            Map<String, String> parseErrorLabels = new HashMap<>();
+            parseErrorLabels.put("topic", topic);
+            parseErrorLabels.put("partition", String.valueOf(partition));
+            metricsCollector.incrementCounter("producer.response.parse_error", parseErrorLabels);
+            
+            // 解析失败也抛出异常，让重试机制处理
+            throw new RuntimeException("Failed to parse ProduceResponse", e);
+        }
+    }
+    
+    /**
+     * 判断错误码是否应该重试
+     * @param errorCode Kafka错误码
+     * @return true表示应该重试，false表示不应该重试
+     */
+    private boolean shouldRetryForError(short errorCode) {
+        switch (errorCode) {
+            // 可重试的错误
+            case 5:  // LEADER_NOT_AVAILABLE
+            case 6:  // NOT_LEADER_FOR_PARTITION 
+            case 7:  // REQUEST_TIMED_OUT
+            case 8:  // BROKER_NOT_AVAILABLE
+            case 9:  // REPLICA_NOT_AVAILABLE
+            case 19: // NOT_ENOUGH_REPLICAS
+            case 20: // NOT_ENOUGH_REPLICAS_AFTER_APPEND
+            case 13: // NETWORK_EXCEPTION
+                return true;
+                
+            // 不可重试的错误
+            case 1:  // OFFSET_OUT_OF_RANGE
+            case 2:  // CORRUPT_MESSAGE
+            case 3:  // UNKNOWN_TOPIC_OR_PARTITION
+            case 10: // MESSAGE_TOO_LARGE
+            case 17: // INVALID_TOPIC_EXCEPTION
+            case 18: // RECORD_LIST_TOO_LARGE
+            case 21: // INVALID_REQUIRED_ACKS
+            case 29: // TOPIC_AUTHORIZATION_FAILED
+            case 31: // CLUSTER_AUTHORIZATION_FAILED
+            case 32: // INVALID_TIMESTAMP
+            case 44: // POLICY_VIOLATION
+                return false;
+                
+            // 默认情况：未知错误，保守地选择重试
+            default:
+                System.out.printf("⚠️ [Producer] 未知错误码 %d，默认选择重试\n", errorCode);
+                return true;
         }
     }
 
@@ -542,7 +677,12 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                     metadataManager.refreshMetadata(topic, true, true);
                 }
                 
-        connectionPool.sendAndReceive(request);
+        ByteBuffer syncResponse = connectionPool.sendAndReceive(request);
+                
+                // 处理同步发送的响应
+                handleProduceResponse(syncResponse, topic, partition, 
+                    Collections.singletonList(record), retryCount);
+                
                 if (retryCount > 0) {
                     System.out.printf("单条消息重试发送成功: topic=%s, partition=%d\n", topic, partition);
                 }

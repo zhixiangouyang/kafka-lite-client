@@ -49,7 +49,6 @@ public class KafkaConsumerTest {
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
         config.setHeartbeatIntervalMs(1000);        // 心跳间隔1秒
-//        config.setAutoOffsetReset("none");
 
         // 3. 创建消费者实例
         consumer = new KafkaLiteConsumerImpl(
