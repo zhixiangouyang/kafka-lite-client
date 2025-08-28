@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 域名支持测试
  * 演示新的智能DR切换：域名解析 + 自动重解析
  */
-public class DomainSupportTest {
+public class DomainSupportConsumerTest {
     private static volatile KafkaLiteConsumerImpl consumer;
     private static final AtomicBoolean running = new AtomicBoolean(true);
     
@@ -46,7 +46,7 @@ public class DomainSupportTest {
      */
     private static void testDomainSupport() {
         String kafkaDomain = "kafka.kafka_dr_1_noacl_test.test.mq.shopee.io:19092";  // 可以改为您的实际域名
-        String groupId = "domain-support-test-group";
+        String groupId = "domain-support-test-group-1"; // 使用动态group ID避免历史offset影响
         ConsumerConfig config = createTestConfig();
         
         try {
@@ -56,7 +56,7 @@ public class DomainSupportTest {
             consumer = new KafkaLiteConsumerImpl(groupId, kafkaDomain, config);
             
             // 订阅主题
-            consumer.subscribe(Arrays.asList("cluster-test-topic-7"));
+            consumer.subscribe(Arrays.asList("cluster-test-topic-11"));
             
             System.out.println("\n=== 开始持续消费（演示自动DR切换） ===");
             System.out.println("新功能: 双重DNS检查机制");
@@ -142,9 +142,8 @@ public class DomainSupportTest {
      */
     private static ConsumerConfig createTestConfig() {
         ConsumerConfig config = new ConsumerConfig();
-        config.setEnableAutoCommit(false);  // 手动提交，便于观察
-        config.setMaxPollRecords(5);
-        config.setHeartbeatIntervalMs(5000);
+        config.setEnableAutoCommit(true);  // 手动提交，便于观察
+        config.setHeartbeatIntervalMs(3000);
         config.setMetadataRefreshIntervalMs(300000); // 改为5分钟，减少刷新频率
         config.setFetchMaxWaitMs(3000); // fetch超时3秒，域名切换测试需要快速响应
         

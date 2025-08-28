@@ -337,15 +337,9 @@ public class ConsumerCoordinator {
                     System.err.println("[Leader] 主动心跳异常: " + e);
                 }
             } else {
-                // 非Leader等待Leader分配完成
-                if (allMembers.isEmpty() && retryCount < 10) {
-                    System.out.printf("[Non-leader] 等待Leader分配完成: allMembers.size=%d, retryCount=%d\n", allMembers.size(), retryCount);
-                    Thread.sleep(1000 * (retryCount + 1));
-                    syncGroupWithRetry(retryCount + 1);
-                    return;
-                }
-                System.out.printf("[DEBUG] Non-leader syncGroup: memberId=%s, allMembers=%s, retryCount=%d\n", memberId, allMembers, retryCount);
                 // 非Leader发送空的分配信息，等待Coordinator返回Leader的分配结果
+                // 注意：Non-leader的allMembers为空是正常的，因为Kafka协议中只有Leader会收到完整成员列表
+                System.out.printf("[DEBUG] Non-leader syncGroup: memberId=%s, allMembers=%s, retryCount=%d\n", memberId, allMembers, retryCount);
                 request = SyncGroupRequestBuilder.buildEmptyAssignment(clientId, groupId, generationId, memberId);
                 System.out.println("[ConsumerCoordinator] Non-leader sending empty assignment");
             }
@@ -711,6 +705,8 @@ public class ConsumerCoordinator {
     private Map<String, List<PartitionAssignment>> calculatePartitionAssignments() {
         Map<String, List<PartitionAssignment>> assignments = new HashMap<>();
         
+        System.out.printf("[DEBUG] calculatePartitionAssignments START: subscribedTopics=%s\n", subscribedTopics);
+        
         // 过滤掉空字符串的memberId
         List<MemberInfo> validMembers = new ArrayList<>();
         for (MemberInfo member : allMembers) {
@@ -730,10 +726,26 @@ public class ConsumerCoordinator {
         Map<String, List<Integer>> topicPartitions = getTopicPartitions();
         System.out.printf("[DEBUG] calculatePartitionAssignments: topicPartitions=%s\n", topicPartitions);
         
+        if (topicPartitions.isEmpty()) {
+            System.out.println("[ERROR] No topic partitions found! This will result in empty assignments!");
+            return assignments;
+        }
+        
         // 使用分区分配器
         assignments = partitionAssignor.assign(validMembers, topicPartitions);
         
-        System.out.printf("[DEBUG] calculatePartitionAssignments: assignments=%s\n", assignments);
+        System.out.printf("[DEBUG] calculatePartitionAssignments RESULT: assignments=%s\n", assignments);
+        
+        // 验证每个成员都有分配
+        for (MemberInfo member : validMembers) {
+            List<PartitionAssignment> memberAssignments = assignments.get(member.getMemberId());
+            if (memberAssignments == null || memberAssignments.isEmpty()) {
+                System.out.printf("[ERROR] Member %s received EMPTY assignment!\n", member.getMemberId());
+            } else {
+                System.out.printf("[INFO] Member %s assigned partitions: %s\n", member.getMemberId(), memberAssignments);
+            }
+        }
+        
         return assignments;
     }
     

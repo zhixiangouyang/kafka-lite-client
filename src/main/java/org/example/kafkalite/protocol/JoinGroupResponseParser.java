@@ -86,6 +86,7 @@ public class JoinGroupResponseParser {
             
             // 读取members数组
             int memberCount = buffer.getInt();
+            System.out.printf("[JoinGroupResponseParser] memberCount=%d\n", memberCount);
             if (memberCount < 0 || memberCount > 1000) {
                 throw new IllegalArgumentException("Invalid member count: " + memberCount);
             }
@@ -93,8 +94,10 @@ public class JoinGroupResponseParser {
             List<String> members = new ArrayList<>();
             for (int i = 0; i < memberCount; i++) {
                 String member = readString(buffer);
+                System.out.printf("[JoinGroupResponseParser] member[%d]=%s\n", i, member);
                 members.add(member);
             }
+            System.out.printf("[JoinGroupResponseParser] Total members parsed: %d, members=%s\n", members.size(), members);
             
             JoinGroupResult result = new JoinGroupResult(errorCode, generationId, protocolName, leaderId, memberId, members);
             return result;

@@ -45,21 +45,22 @@ public class KafkaConsumerTest {
         config.setEnableAutoCommit(true);           // 启用自动提交
         config.setAutoCommitIntervalMs(5000);       // 自动提交间隔5秒
         config.setFetchMaxBytes(1024 * 1024);       // 单次最多拉取1MB数据
-        config.setFetchMaxWaitMs(2000);             // fetch超时2秒，基础消费测试
+        config.setFetchMaxWaitMs(3000);             // fetch超时2秒，基础消费测试
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
         config.setHeartbeatIntervalMs(1000);        // 心跳间隔1秒
 
         // 3. 创建消费者实例
         consumer = new KafkaLiteConsumerImpl(
-            "rebalance-test-group-1",                    // 消费者组ID
+            "rebalance-test-group-3",                    // 消费者组ID
             Arrays.asList(broker),           // Kafka集群地址
             config                           // 配置
         );
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("rebalance-test-topic-6"));
+            consumer.subscribe(Arrays.asList("cluster-test-topic-11"));
+//            consumer.subscribe(Arrays.asList("rebalance-test-topic-6"));
 //            consumer.subscribe(Arrays.asList("rebalance-test-topic"));
 
             System.out.println("开始消费消息...");
@@ -99,7 +100,7 @@ public class KafkaConsumerTest {
 
                 // 稍微休息一下，避免打印太快
                 if (records.isEmpty()) {
-                    Thread.sleep(1000);
+                    Thread.sleep(100);
                 }
             }
         } catch (InterruptedException e) {

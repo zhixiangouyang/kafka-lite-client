@@ -218,7 +218,7 @@ public class DomainSupportProducerTest {
                                 String messageValue = String.format("%d:%s", localIndex, messageTemplate);
 
                                 ProducerRecord record = new ProducerRecord(
-                                            "cluster-test-topic-7",
+                                            "cluster-test-topic-11",
                                         "key" + localIndex,
                                         messageValue
                                 );

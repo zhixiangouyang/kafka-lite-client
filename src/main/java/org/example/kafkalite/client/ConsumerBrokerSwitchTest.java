@@ -61,7 +61,7 @@ public class ConsumerBrokerSwitchTest {
         ConsumerConfig config = new ConsumerConfig();
         config.setEnableAutoCommit(true);           // 启用自动提交
         config.setAutoCommitIntervalMs(5000);       // 自动提交间隔5秒
-        config.setFetchMaxBytes(1024 * 1024);       // 单次最多拉取1MB数据
+        config.setFetchMaxBytes(2 * 1024 * 1024);       // 单次最多拉取1MB数据
         config.setFetchMaxWaitMs(2000);             // fetch超时2秒，broker切换测试需要快速检测
         config.setMaxRetries(3);                    // 最大重试次数
         config.setRetryBackoffMs(1000);             // 重试间隔1秒
@@ -82,7 +82,7 @@ public class ConsumerBrokerSwitchTest {
         try {
             // 4. 订阅主题
 //            consumer.subscribe(Arrays.asList("cluster1-test-topic"));
-            consumer.subscribe(Arrays.asList("broker-test-topic-5"));
+            consumer.subscribe(Arrays.asList("broker-test-topic-6"));
 
             System.out.println("开始消费消息...");
             System.out.println("现在可以手动停止broker来测试切换:");

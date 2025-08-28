@@ -75,7 +75,7 @@ public class KafkaProducerTest {
         if (args.length > 1) {
             testDurationMs = Long.parseLong(args[1]);
         } else {
-            testDurationMs = 1000000; // 默认3分钟
+            testDurationMs = 60000 * 20; // 默认3分钟
         }
         
         // 消息大小（字节）
@@ -179,9 +179,9 @@ public class KafkaProducerTest {
                                 ProducerRecord record = new ProducerRecord(
 //                                    "ouyangTest6",
 //                                    "performance-test-topic",
-//                                    "broker-test-topic-5",
+                                    "broker-test-topic-6",
 //                                    "cluster-test-topic-2",
-                                    "rebalance-test-topic-6",
+//                                    "rebalance-test-topic-6",
                                     "key" + localIndex,
                                     messageValue
                                 );
