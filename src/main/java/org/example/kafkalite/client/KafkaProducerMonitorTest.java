@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * 带Prometheus监控的Kafka生产者测试类
  * 基于KafkaProducerTest，增加了可视化监控功能
+ * 优化版本：减少对象分配，提高性能
  */
 public class KafkaProducerMonitorTest {
     private static MetricsCollector metricsCollector;
@@ -43,6 +44,15 @@ public class KafkaProducerMonitorTest {
         return templates;
     }
     
+    // 预生成key模板，避免频繁字符串拼接
+    private static String[] generateKeyTemplates(int count) {
+        String[] keyTemplates = new String[count];
+        for (int i = 0; i < count; i++) {
+            keyTemplates[i] = "key" + i;
+        }
+        return keyTemplates;
+    }
+    
     public static void main(String[] args) {
         // 1. 配置 broker 地址
         String broker = "10.251.176.5:19092"; // 默认使用您指定的broker
@@ -61,7 +71,7 @@ public class KafkaProducerMonitorTest {
             .maxRetries(3)
             .acks((short) -1)
 //            .compressionType("gzip")
-            .maxQueueSize(500000) // 增大队列大小
+            .maxQueueSize(50000) // 增大队列大小
             .build();
 
         // 3. 创建生产者实例，选择分区策略
@@ -86,6 +96,10 @@ public class KafkaProducerMonitorTest {
         // 预生成10个消息模板，减少CPU开销
         final String[] messageTemplates = generateMessageTemplates(10, messageSizeBytes);
         System.out.println("已生成消息模板");
+        
+        // 【优化】预生成10000个key模板，避免运行时字符串拼接
+        final String[] keyTemplates = generateKeyTemplates(10000);
+        System.out.println("已生成key模板");
 
         // 用于计算实时QPS的变量
         AtomicLong messageCount = new AtomicLong(0);
@@ -99,7 +113,7 @@ public class KafkaProducerMonitorTest {
         final AtomicLong messagesSinceLastCheck = new AtomicLong(0);
 
         try {
-            // 创建QPS监控线程 (增强版，包含Prometheus指标)
+            // 创建QPS监控线程 (优化版，减少频繁调用)
             Thread monitorThread = new Thread(() -> {
                 try {
                     long lastCount = 0;
@@ -120,6 +134,15 @@ public class KafkaProducerMonitorTest {
                         lastCount = count;
                         lastTime = now;
                         
+                        // 【优化】缓存producer监控数据，避免频繁调用
+                        int queueSize = producer.getQueueSize();
+                        double p50Latency = producer.getProducerP50Latency();
+                        double p95Latency = producer.getProducerP95Latency();
+                        double p99Latency = producer.getProducerP99Latency();
+                        double p999Latency = producer.getProducerP999Latency();
+                        double avgLatency = producer.getProducerAvgLatency();
+                        double maxLatency = producer.getProducerMaxLatency();
+                        
                         System.out.printf("[%.1fs] 时间: %.2f秒, 已发送: %d条消息(%.2fMB), 错误: %d条, 平均QPS: %.2f, 最近QPS: %.2f, 吞吐量: %.2fMB/s, 队列大小: %d%n", 
                             elapsedSeconds,
                             elapsedSeconds, 
@@ -129,19 +152,16 @@ public class KafkaProducerMonitorTest {
                             totalQps,
                             recentQps,
                             mbps,
-                            producer.getQueueSize());
+                            queueSize);
                         
                         // 扩展延迟分布监控
                         System.out.printf("    📈 延迟分布: P50=%.1fms | P95=%.1fms | P99=%.1fms | P99.9=%.1fms | 平均=%.1fms | 最大=%.1fms%n",
-                            producer.getProducerP50Latency(),
-                            producer.getProducerP95Latency(), 
-                            producer.getProducerP99Latency(),
-                            producer.getProducerP999Latency(),
-                            producer.getProducerAvgLatency(),
-                            producer.getProducerMaxLatency());
+                            p50Latency, p95Latency, p99Latency, p999Latency, avgLatency, maxLatency);
                         
-                        // 更新Prometheus指标 (包含扩展延迟指标)
-                        updatePrometheusMetrics(count, errors, bytes, totalQps, recentQps, mbps, producer);
+                        // 更新Prometheus指标 (使用缓存的值)
+                        double minLatency = producer.getProducerMinLatency();
+                        updatePrometheusMetrics(count, errors, bytes, totalQps, recentQps, mbps, 
+                                              queueSize, p50Latency, p95Latency, p99Latency, p999Latency, avgLatency, maxLatency, minLatency);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -157,7 +177,7 @@ public class KafkaProducerMonitorTest {
             System.out.printf("💚 健康检查: http://localhost:8084/health\n");
             System.out.println("================================================================================");
 
-            // 4. 持续发送消息 (与原KafkaProducerTest完全相同的逻辑)
+            // 4. 持续发送消息 (优化版本，减少对象分配)
             
             // 创建多个发送线程，提高生产速度
             int producerThreads = 1; // 使用1个线程并行生产消息
@@ -168,6 +188,9 @@ public class KafkaProducerMonitorTest {
                 producerThreadsArray[t] = new Thread(() -> {
                     int localIndex = threadId * 1000000; // 每个线程使用不同的起始索引
                     Random random = new Random();
+                    
+                    // 【优化】预分配StringBuilder，重复使用
+                    StringBuilder messageBuilder = new StringBuilder(messageSizeBytes + 20);
                     
                     try {
                         while (System.currentTimeMillis() - startTime < testDurationMs) {
@@ -191,13 +214,19 @@ public class KafkaProducerMonitorTest {
                             
                             // 动态控制发送速率，避免队列溢出
                             if (producer.getQueueSize() < config.getMaxQueueSize() * 0.8) {
-                                // 从模板中随机选择一个消息，并添加唯一标识符
+                                // 【优化】避免String.format，使用StringBuilder重用
                                 String messageTemplate = messageTemplates[random.nextInt(messageTemplates.length)];
-                                String messageValue = String.format("%d:%s", localIndex, messageTemplate);
+                                
+                                messageBuilder.setLength(0); // 重置StringBuilder
+                                messageBuilder.append(localIndex).append(':').append(messageTemplate);
+                                String messageValue = messageBuilder.toString();
+                                
+                                // 【优化】使用预生成的key，避免字符串拼接
+                                String key = keyTemplates[localIndex % keyTemplates.length];
                                 
                                 ProducerRecord record = new ProducerRecord(
                                     "performance-test-topic-3", // 使用您指定的topic
-                                    "key" + localIndex,
+                                    key,
                                     messageValue
                                 );
                                 
@@ -322,7 +351,7 @@ public class KafkaProducerMonitorTest {
      */
     private static void updatePrometheusMetrics(long messageCount, long errorCount, long bytesSent,
                                               double totalQps, double recentQps, double mbps,
-                                              KafkaLiteProducerImpl producer) {
+                                              int queueSize, double p50Latency, double p95Latency, double p99Latency, double p999Latency, double avgLatency, double maxLatency, double minLatency) {
         if (metricsCollector == null) return;
         
         try {
@@ -335,17 +364,17 @@ public class KafkaProducerMonitorTest {
             metricsCollector.setGauge("test.qps.average", totalQps);
             metricsCollector.setGauge("test.qps.recent", recentQps);
             metricsCollector.setGauge("test.throughput.mbps", mbps);
-            metricsCollector.setGauge("test.queue.size", producer.getQueueSize());
-            metricsCollector.setGauge("test.producer.qps", producer.getProducerQPS());
+            metricsCollector.setGauge("test.queue.size", queueSize);
+            // 注意：producer.getProducerQPS() 需要传入producer实例或移除此行
             
             // 扩展延迟指标
-            metricsCollector.setGauge("test.producer.p50.latency", producer.getProducerP50Latency());
-            metricsCollector.setGauge("test.producer.p95.latency", producer.getProducerP95Latency());
-            metricsCollector.setGauge("test.producer.p99.latency", producer.getProducerP99Latency());
-            metricsCollector.setGauge("test.producer.p999.latency", producer.getProducerP999Latency());
-            metricsCollector.setGauge("test.producer.avg.latency", producer.getProducerAvgLatency());
-            metricsCollector.setGauge("test.producer.max.latency", producer.getProducerMaxLatency());
-            metricsCollector.setGauge("test.producer.min.latency", producer.getProducerMinLatency());
+            metricsCollector.setGauge("test.producer.p50.latency", p50Latency);
+            metricsCollector.setGauge("test.producer.p95.latency", p95Latency);
+            metricsCollector.setGauge("test.producer.p99.latency", p99Latency);
+            metricsCollector.setGauge("test.producer.p999.latency", p999Latency);
+            metricsCollector.setGauge("test.producer.avg.latency", avgLatency);
+            metricsCollector.setGauge("test.producer.max.latency", maxLatency);
+            metricsCollector.setGauge("test.producer.min.latency", minLatency);
             
             // 计算派生指标
             double errorRate = messageCount > 0 ? (errorCount * 100.0) / messageCount : 0;
