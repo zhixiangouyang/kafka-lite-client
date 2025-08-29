@@ -63,6 +63,9 @@ public class KafkaProducerMonitorTest {
 
         // 初始化监控
         initializeMonitoring();
+        
+        // 启动优化效果监控
+        OptimizationTestMonitor.schedulePeriodicMonitoring();
 
         // 2. 创建生产者配置 (与原KafkaProducerTest相同)
         ProducerConfig config = new ProducerConfig.Builder()

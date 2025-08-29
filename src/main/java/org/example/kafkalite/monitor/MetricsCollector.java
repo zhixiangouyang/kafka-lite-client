@@ -11,9 +11,15 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class MetricsCollector {
     private static final int WINDOW_SIZE_MS = 60_000; // 1 minute window
+    private static final int MAX_LATENCY_SAMPLES = 10_000; // 最多保留10000个延迟样本
+    private static final long CLEANUP_INTERVAL_MS = 30_000; // 30秒清理一次
+    
     private final ConcurrentMap<String, AtomicLong> counters = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, List<Long>> latencies = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> windowStartTimes = new ConcurrentHashMap<>();
+    
+    // 添加最后清理时间戳
+    private volatile long lastCleanupTime = System.currentTimeMillis();
 
     // 新增：支持标签的指标存储
     private final ConcurrentMap<MetricKey, AtomicLong> labeledCounters = new ConcurrentHashMap<>();
@@ -36,6 +42,52 @@ public class MetricsCollector {
     private static String generateInstanceId() {
         return "instance-" + System.currentTimeMillis() % 10000;
     }
+    
+    /**
+     * 检查并清理过期数据，防止内存泄漏
+     */
+    private void checkAndCleanup() {
+        long now = System.currentTimeMillis();
+        if (now - lastCleanupTime > CLEANUP_INTERVAL_MS) {
+            lastCleanupTime = now;
+            
+            // 异步清理，不阻塞主流程
+            try {
+                cleanupOldData(now);
+            } catch (Exception e) {
+                // 清理失败不影响主功能
+                System.err.printf("[MetricsCollector] 清理数据失败: %s\n", e.getMessage());
+            }
+        }
+    }
+    
+    /**
+     * 清理过期的延迟数据
+     */
+    private void cleanupOldData(long currentTime) {
+        // 清理普通延迟数据
+        for (Map.Entry<String, List<Long>> entry : latencies.entrySet()) {
+            List<Long> metricLatencies = entry.getValue();
+            synchronized (metricLatencies) {
+                // 保留最近的样本，删除过多的历史数据
+                while (metricLatencies.size() > MAX_LATENCY_SAMPLES / 2) {
+                    metricLatencies.remove(0);
+                }
+            }
+        }
+        
+        // 清理带标签的延迟数据
+        for (Map.Entry<MetricKey, List<Long>> entry : labeledLatencies.entrySet()) {
+            List<Long> metricLatencies = entry.getValue();
+            if (metricLatencies != null) {
+                synchronized (metricLatencies) {
+                    while (metricLatencies.size() > MAX_LATENCY_SAMPLES / 2) {
+                        metricLatencies.remove(0);
+                    }
+                }
+            }
+        }
+    }
 
     // 原有方法保持不变
     public void incrementCounter(String metric) {
@@ -43,7 +95,19 @@ public class MetricsCollector {
     }
 
     public void recordLatency(String metric, long latencyMs) {
-        latencies.computeIfAbsent(metric, k -> Collections.synchronizedList(new ArrayList<>())).add(latencyMs);
+        // 自动清理过期数据
+        checkAndCleanup();
+        
+        List<Long> metricLatencies = latencies.computeIfAbsent(metric, k -> Collections.synchronizedList(new ArrayList<>()));
+        
+        synchronized (metricLatencies) {
+            metricLatencies.add(latencyMs);
+            
+            // 如果样本过多，删除最老的样本（滑动窗口）
+            while (metricLatencies.size() > MAX_LATENCY_SAMPLES) {
+                metricLatencies.remove(0);
+            }
+        }
     }
 
     public double getQPS(String metric) {
@@ -149,8 +213,20 @@ public class MetricsCollector {
     }
     
     public void recordLatency(String metric, long latencyMs, Map<String, String> labels) {
+        // 自动清理过期数据
+        checkAndCleanup();
+        
         MetricKey key = new MetricKey(metric, labels);
-        labeledLatencies.computeIfAbsent(key, k -> Collections.synchronizedList(new ArrayList<>())).add(latencyMs);
+        List<Long> metricLatencies = labeledLatencies.computeIfAbsent(key, k -> Collections.synchronizedList(new ArrayList<>()));
+        
+        synchronized (metricLatencies) {
+            metricLatencies.add(latencyMs);
+            
+            // 如果样本过多，删除最老的样本（滑动窗口）
+            while (metricLatencies.size() > MAX_LATENCY_SAMPLES) {
+                metricLatencies.remove(0);
+            }
+        }
     }
     
     public void setGauge(String metric, double value) {

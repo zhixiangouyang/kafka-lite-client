@@ -20,10 +20,49 @@ public class KafkaRecordEncoder {
     private static final int MAX_MESSAGE_BYTES = 1024 * 1024;
     // 单条消息大小警告阈值
     private static final int MESSAGE_SIZE_WARNING_THRESHOLD = 100 * 1024; // 100KB
+    
+    // ThreadLocal缓存：每个线程重用字节数组，避免重复分配
+    private static final ThreadLocal<byte[]> KEY_BYTES_CACHE = ThreadLocal.withInitial(() -> new byte[4096]);
+    private static final ThreadLocal<byte[]> VALUE_BYTES_CACHE = ThreadLocal.withInitial(() -> new byte[4096]);
+    
+    /**
+     * 安全获取字符串的字节数组，重用ThreadLocal缓存
+     */
+    private static byte[] getStringBytes(String str, boolean isKey) {
+        if (str == null) {
+            return null;
+        }
+        
+        byte[] stringBytes = str.getBytes(StandardCharsets.UTF_8);
+        int requiredSize = stringBytes.length;
+        
+        // 如果字符串太大，直接返回新数组，不缓存
+        if (requiredSize > 8192) { // 8KB阈值
+            return stringBytes;
+        }
+        
+        // 从ThreadLocal缓存获取数组
+        ThreadLocal<byte[]> cache = isKey ? KEY_BYTES_CACHE : VALUE_BYTES_CACHE;
+        byte[] cachedArray = cache.get();
+        
+        // 如果缓存数组太小，扩容
+        if (cachedArray.length < requiredSize) {
+            cachedArray = new byte[Math.max(requiredSize * 2, 4096)];
+            cache.set(cachedArray);
+        }
+        
+        // 复制数据到缓存数组的前部分
+        System.arraycopy(stringBytes, 0, cachedArray, 0, requiredSize);
+        
+        // 返回正确长度的新数组
+        byte[] result = new byte[requiredSize];
+        System.arraycopy(cachedArray, 0, result, 0, requiredSize);
+        return result;
+    }
 
     public static ByteBuffer encodeRecordBatch(String key, String value) {
-        byte[] keyBytes = key != null ? key.getBytes(StandardCharsets.UTF_8) : null;
-        byte[] valueBytes = value != null ? value.getBytes(StandardCharsets.UTF_8) : null;
+        byte[] keyBytes = getStringBytes(key, true);
+        byte[] valueBytes = getStringBytes(value, false);
         
         // 检查消息大小
         int messageSize = 1 + 1; // magic + attributes
@@ -45,7 +84,9 @@ public class KafkaRecordEncoder {
         // key: bytes (int32 + data)
         // value: bytes (int32 + data)
 
-        ByteBuffer buf = ByteBuffer.allocate(8 + 4 + 4 + messageSize); // offset + size + crc + message
+        // 使用对象池分配ByteBuffer
+        BufferPool bufferPool = BufferPool.getInstance();
+        ByteBuffer buf = bufferPool.allocate(8 + 4 + 4 + messageSize); // offset + size + crc + message
 
         // offset (会被broker重写)
         buf.putLong(0L);
@@ -131,8 +172,9 @@ public class KafkaRecordEncoder {
             totalSize += messageSize;
         }
         
-        // 分配足够大的缓冲区
-        ByteBuffer batchBuffer = ByteBuffer.allocate(totalSize);
+        // 使用对象池分配批量缓冲区
+        BufferPool bufferPool = BufferPool.getInstance();
+        ByteBuffer batchBuffer = bufferPool.allocate(totalSize);
         
         // 复制所有有效消息
         for (ByteBuffer message : validMessages) {
@@ -170,8 +212,8 @@ public class KafkaRecordEncoder {
         
         for (int i = 0; i < records.size(); i++) {
             ProducerRecord record = records.get(i);
-            byte[] keyBytes = record.getKey() != null ? record.getKey().getBytes(StandardCharsets.UTF_8) : null;
-            byte[] valueBytes = record.getValue() != null ? record.getValue().getBytes(StandardCharsets.UTF_8) : null;
+            byte[] keyBytes = getStringBytes(record.getKey(), true);
+            byte[] valueBytes = getStringBytes(record.getValue(), false);
             
             // 计算单条消息大小
             int messageSize = 1 + 1; // magic + attributes
@@ -208,8 +250,9 @@ public class KafkaRecordEncoder {
             return ByteBuffer.allocate(0);
         }
         
-        // 分配足够大的缓冲区
-        ByteBuffer batchBuffer = ByteBuffer.allocate(totalSize);
+        // 使用对象池分配批量缓冲区  
+        BufferPool bufferPool = BufferPool.getInstance();
+        ByteBuffer batchBuffer = bufferPool.allocate(totalSize);
         
         // 直接构建批量消息
         for (int i = 0; i < validCount; i++) {

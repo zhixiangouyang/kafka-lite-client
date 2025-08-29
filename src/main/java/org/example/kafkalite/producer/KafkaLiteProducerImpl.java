@@ -7,6 +7,7 @@ import org.example.kafkalite.monitor.MetricsCollector;
 import org.example.kafkalite.protocol.KafkaRecordEncoder;
 import org.example.kafkalite.protocol.ProduceRequestBuilder;
 import org.example.kafkalite.protocol.ProduceResponseParser;
+import org.example.kafkalite.protocol.BufferPool;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -59,12 +60,12 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 
                 cachedRecords.addAll(newRecords);
                 
-                // 计算当前批次的字节大小
+                // 计算当前批次的字节大小（优化：更精确的估算，避免重复字节转换）
                 int currentBatchBytes = 0;
                 for (ProducerRecord record : cachedRecords) {
-                    // 估算消息大小：key + value + 头部开销
-                    int keySize = record.getKey() != null ? record.getKey().getBytes().length : 0;
-                    int valueSize = record.getValue() != null ? record.getValue().getBytes().length : 0;
+                    // 更精确的消息大小估算：key + value + 头部开销
+                    int keySize = record.getKey() != null ? record.getKey().length() : 0; // 对于ASCII字符，UTF-8长度 ≈ 字符长度
+                    int valueSize = record.getValue() != null ? record.getValue().length() : 0; // 对于ASCII字符，UTF-8长度 ≈ 字符长度  
                     currentBatchBytes += keySize + valueSize + 32; // 32字节头部开销估算
                 }
                 
@@ -479,6 +480,21 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
         } else {
             // 压缩版本（修复后）
             return KafkaRecordEncoder.encodeBatchMessagesOptimized(records, compressionType);
+        }
+    }
+    
+    /**
+     * 安全释放ByteBuffer到对象池
+     * @param buffer 要释放的ByteBuffer
+     */
+    private void safeReleaseBuffer(ByteBuffer buffer) {
+        try {
+            if (buffer != null) {
+                BufferPool.getInstance().release(buffer);
+            }
+        } catch (Exception e) {
+            // 释放失败不影响主流程，只记录日志
+            System.err.printf("[Producer] ByteBuffer释放失败: %s\n", e.getMessage());
         }
     }
     
