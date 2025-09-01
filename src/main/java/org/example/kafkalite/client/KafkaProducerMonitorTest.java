@@ -228,7 +228,7 @@ public class KafkaProducerMonitorTest {
                                 String key = keyTemplates[localIndex % keyTemplates.length];
                                 
                                 ProducerRecord record = new ProducerRecord(
-                                    "performance-test-topic-3", // 使用您指定的topic
+                                    "performance-test-topic-5", // 使用您指定的topic
                                     key,
                                     messageValue
                                 );

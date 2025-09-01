@@ -2,6 +2,7 @@ package org.example.kafkalite.consumer;
 
 import org.example.kafkalite.core.KafkaSocketClient;
 import org.example.kafkalite.core.KafkaSingleSocketClient;
+import org.example.kafkalite.metadata.MetadataManager;
 import org.example.kafkalite.protocol.OffsetCommitRequestBuilder;
 import org.example.kafkalite.protocol.OffsetCommitResponseParser;
 import org.example.kafkalite.protocol.OffsetFetchRequestBuilder;
@@ -23,6 +24,7 @@ public class OffsetManager {
     private ConsumerCoordinator coordinator;
     private KafkaSingleSocketClient coordinatorSocket;
     private ConsumerConfig config; // 新增：保存配置引用
+    private MetadataManager metadataManager; // 新增：MetadataManager引用
 
     public OffsetManager(String groupId, List<String> bootstrapServers) {
         this.groupId = groupId;
@@ -37,6 +39,11 @@ public class OffsetManager {
     // 新增：设置配置
     public void setConfig(ConsumerConfig config) {
         this.config = config;
+    }
+    
+    // 新增：设置MetadataManager
+    public void setMetadataManager(MetadataManager metadataManager) {
+        this.metadataManager = metadataManager;
     }
 
     public void setCoordinatorSocket(KafkaSingleSocketClient socket) {
@@ -99,6 +106,33 @@ public class OffsetManager {
     }
     
     /**
+     * 从coordinator获取分区的leader broker地址
+     * @param topic 主题名称
+     * @param partition 分区号
+     * @return leader broker地址 (host:port)，如果无法获取则返回null
+     */
+    private String getPartitionLeaderFromCoordinator(String topic, int partition) {
+        try {
+            if (metadataManager != null) {
+                // 通过MetadataManager获取分区leader信息
+                Map<Integer, String> partitionLeaders = metadataManager.getPartitionLeaders(topic);
+                String leader = partitionLeaders.get(partition);
+                if (leader != null) {
+                    System.out.printf("[OffsetManager] 从MetadataManager获取leader: topic=%s, partition=%d, leader=%s\n", 
+                        topic, partition, leader);
+                    return leader;
+                }
+            }
+            System.out.printf("[OffsetManager] 无法从MetadataManager获取leader: topic=%s, partition=%d\n", topic, partition);
+            return null;
+        } catch (Exception e) {
+            System.err.printf("[OffsetManager] 获取分区leader失败: topic=%s, partition=%d, 错误=%s\n", 
+                topic, partition, e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
      * 根据auto.offset.reset策略获取起始offset
      * @param topic 主题名称
      * @param partition 分区号
@@ -144,20 +178,24 @@ public class OffsetManager {
             ByteBuffer request = ListOffsetsRequestBuilder.build(
                 clientId, topicPartitions, timestamp, 1);
             
-            // 发送请求
+            // 🔥 修复：ListOffsets请求应该发送给分区的leader broker，不是coordinator
             ByteBuffer response;
-            if (coordinator != null && coordinator.getCoordinatorSocket() != null) {
-                // 优先使用coordinator连接
-                System.out.printf("[OffsetManager] 通过coordinator获取ListOffsets: %s:%d\n", 
-                    coordinator.getCoordinatorSocket().getHost(), coordinator.getCoordinatorSocket().getPort());
-                response = coordinator.getCoordinatorSocket().sendAndReceive(request);
+            String leaderBroker = getPartitionLeaderFromCoordinator(topic, partition);
+            if (leaderBroker != null) {
+                // 使用分区的leader broker
+                String[] parts = leaderBroker.split(":");
+                String host = parts[0];
+                int port = Integer.parseInt(parts[1]);
+                System.out.printf("[OffsetManager] 通过分区leader获取ListOffsets: %s:%d (topic=%s, partition=%d)\n", 
+                    host, port, topic, partition);
+                response = KafkaSocketClient.sendAndReceive(host, port, request);
             } else {
-                // 回退到使用bootstrap server
+                // 如果无法获取leader信息，回退到使用bootstrap server
                 String brokerAddress = bootstrapServers.get(0);
                 String[] parts = brokerAddress.split(":");
                 String host = parts[0];
                 int port = Integer.parseInt(parts[1]);
-                System.out.printf("[OffsetManager] 通过bootstrap server获取ListOffsets: %s:%d\n", host, port);
+                System.out.printf("[OffsetManager] 无法获取leader，通过bootstrap server获取ListOffsets: %s:%d\n", host, port);
                 response = KafkaSocketClient.sendAndReceive(host, port, request);
             }
             

@@ -79,7 +79,7 @@ public class KafkaConsumerMonitorTest {
 
         try {
             // 4. 订阅主题
-            consumer.subscribe(Arrays.asList("performance-test-topic-3"));
+            consumer.subscribe(Arrays.asList("performance-test-topic-5"));
 
             System.out.println("开始消费消息...");
             System.out.printf("📍 目标Broker: %s\n", broker);

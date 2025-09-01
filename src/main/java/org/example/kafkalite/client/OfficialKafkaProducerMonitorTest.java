@@ -186,7 +186,7 @@ public class OfficialKafkaProducerMonitorTest {
                             String messageValue = String.format("%d:%s", localIndex, messageTemplate);
                             
                             ProducerRecord<String, String> record = new ProducerRecord<>(
-                                "performance-test-topic-3", // 使用您指定的topic
+                                "performance-test-topic-5", // 使用您指定的topic
                                 "key" + localIndex,
                                 messageValue
                             );
