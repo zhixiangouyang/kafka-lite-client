@@ -295,12 +295,12 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
     private void doSendPartitionBatch(String topic, int partition, List<ProducerRecord> batch) {
         if (batch.isEmpty()) return;
         
-        long startTime = System.currentTimeMillis();
         // 指标埋点: 记录分区批次发送尝试
         Map<String, String> labels = new java.util.HashMap<>();
         labels.put("topic", topic);
         labels.put("partition", String.valueOf(partition));
         metricsCollector.incrementCounter("producer.batch.send.attempt", labels);
+        
         try {
             // 获取分区对应的broker
             Map<Integer, String> partitionToBroker = metadataManager.getPartitionLeaders(topic);
@@ -326,149 +326,128 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 throw e;
             }
             
-            // 构建批量消息
+            // 构建批量消息（不计入延迟）
             ByteBuffer recordBatch;
             try {
                 recordBatch = buildRecordBatch(batch);
             } catch (Exception e) {
-                System.err.printf("错误: 构建批量消息失败: %s%n", e.getMessage());
+                System.err.printf("错误: 构建消息批次失败: %s%n", e.getMessage());
+                safeReleaseBuffer(null);
                 throw e;
             }
+
+            // 构造ProduceRequest（不计入延迟）
+            ByteBuffer request = ProduceRequestBuilder.build(
+                "kafka-lite-producer",
+                topic,
+                partition,
+                recordBatch,
+                acks,  // 使用配置的acks参数
+                3000,  // 使用固定的超时时间
+                1
+            );
+
+            // 🎯 关键修改：在网络发送前才设置时间戳和开始计时
+            long networkSendStartTime = System.currentTimeMillis();
             
-            // 如果批量消息为空（可能因为大小限制被过滤），则直接返回
-            if (recordBatch.remaining() == 0) {
-                System.err.println("警告: 批量消息为空，可能是因为消息大小超过限制，跳过发送");
-                return;
+            // 为所有消息设置真正的网络发送开始时间
+            for (ProducerRecord record : batch) {
+                record.setSendStartTimestamp(networkSendStartTime);
             }
             
-            // 构造ProduceRequest
-            ByteBuffer request;
-            try {
-                request = ProduceRequestBuilder.build(
-                        "kafka-lite",
-                        topic,
-                        partition,
-                        recordBatch,
-                        acks,  // 使用配置的acks参数
-                        3000,
-                        1
-                );
-            } catch (Exception e) {
-                System.err.printf("错误: 构建ProduceRequest失败: %s%n", e.getMessage());
-                throw e;
-            }
-            
-            // 通过连接池发送，添加重试逻辑
-            ByteBuffer response = null;
+            // 发送请求并处理响应
             Exception lastException = null;
+            boolean sendSuccess = false;
             
-            for (int retryCount = 0; retryCount <= maxRetries; retryCount++) {
+            for (int retryCount = 0; retryCount <= maxRetries && !sendSuccess; retryCount++) {
                 try {
-                    if (retryCount > 0) {
-                        System.out.printf("重试发送: topic=%s, partition=%d, 第%d次重试\n", topic, partition, retryCount);
-                        Thread.sleep(retryBackoffMs);
+                    // 🎯 纯网络发送时间开始
+                    long pureNetworkStartTime = System.currentTimeMillis();
+                    ByteBuffer response = connectionPool.sendAndReceive(request);
+                    long pureNetworkEndTime = System.currentTimeMillis();
+                    
+                    // 计算纯网络延迟（不包含batch构建和request构造时间）
+                    long pureNetworkLatency = pureNetworkEndTime - pureNetworkStartTime;
+                    
+                    // 处理响应
+                    boolean responseSuccess = handleProduceResponse(response, topic, partition, batch, retryCount);
+                    
+                    if (responseSuccess) {
+                        sendSuccess = true;
                         
-                        // 重试时检查是否需要刷新元数据
-                        metadataManager.refreshMetadata(topic, true, true);
-                        Map<Integer, String> newPartitionToBroker = metadataManager.getPartitionLeaders(topic);
-                        String newBrokerAddress = newPartitionToBroker.get(partition);
+                        // 指标埋点: 批次发送成功
+                        metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
                         
-                        if (newBrokerAddress != null && !newBrokerAddress.equals(brokerAddress)) {
-                            System.out.printf("检测到broker变化: %s -> %s\n", brokerAddress, newBrokerAddress);
-                            brokerAddress = newBrokerAddress;
-                            String[] newParts = brokerAddress.split(":");
-                            String newHost = newParts[0];
-                            int newPort = Integer.parseInt(newParts[1]);
-                            
-                            connectionPool = connectionPools.computeIfAbsent(
-                                brokerAddress, 
-                                k -> new KafkaSocketClient.ConnectionPool(newHost, newPort, this.poolSize)
-                            );
+                        // 指标埋点: 记录纯网络延迟（每个批次只记录一次）
+                        metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_NETWORK_LATENCY, pureNetworkLatency);
+                        
+                        // 指标埋点: 记录从网络发送开始到结束的总时间
+                        long totalNetworkTime = pureNetworkEndTime - networkSendStartTime;
+                        metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_BATCH_LATENCY, totalNetworkTime, labels);
+                        
+                        // 指标埋点: 记录每条消息的精确延迟（不包含batch构建时间）
+                        recordMessageLatencies(batch, pureNetworkEndTime);
+                        
+                        System.out.printf("[Producer] 批次发送成功: topic=%s, partition=%d, 消息数=%d, 纯网络延迟=%dms, 总网络时间=%dms%n", 
+                            topic, partition, batch.size(), pureNetworkLatency, totalNetworkTime);
+                        break;
+                    }
+                } catch (Exception e) {
+                    lastException = e;
+                    if (retryCount < maxRetries) {
+                        System.err.printf("发送失败，正在重试 (%d/%d): %s%n", retryCount + 1, maxRetries, e.getMessage());
+                        try {
+                            Thread.sleep(100 * (retryCount + 1)); // 退避重试
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            throw new RuntimeException("Interrupted during retry backoff", ie);
                         }
                     }
-                    
-                response = connectionPool.sendAndReceive(request);
-                    
-                    // 解析并处理响应
-                    handleProduceResponse(response, topic, partition, batch, retryCount);
-                
-                // 指标埋点: 批次发送成功
-                metricsCollector.incrementCounter("producer.batch.send.success", labels);
-                for (int i = 0; i < batch.size(); i++) {
-                    metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
-                }
-                
-                    break; // 成功则退出重试循环
-                    
-            } catch (Exception e) {
-                    lastException = e;
-                    System.err.printf("发送失败: topic=%s, partition=%d, 重试=%d/%d, 错误: %s%n", 
-                        topic, partition, retryCount, maxRetries, e.getMessage());
-                
-                    // 指标埋点: 批次发送重试
-                    labels.put("retry_count", String.valueOf(retryCount));
-                    metricsCollector.incrementCounter("producer.batch.send.retry", labels);
-                    
-                    if (retryCount >= maxRetries) {
-                        System.err.printf("发送最终失败: topic=%s, partition=%d, 已重试%d次%n", 
-                            topic, partition, maxRetries);
-                        
-                        // 指标埋点: 批次发送最终失败
-                metricsCollector.incrementCounter("producer.batch.send.error", labels);
-                for (int i = 0; i < batch.size(); i++) {
-                    metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
-                }
-                
-                        throw new RuntimeException("发送失败，已重试" + maxRetries + "次", lastException);
-                    }
                 }
             }
+            
+            if (!sendSuccess) {
+                // 指标埋点: 批次发送失败
+                metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
+                throw lastException != null ? new RuntimeException("Failed to send after retries", lastException) 
+                                            : new RuntimeException("Failed to send after retries");
+            }
+            
+            // 释放ByteBuffer到对象池
+            safeReleaseBuffer(recordBatch);
             
         } catch (Exception e) {
-            // 发生错误，尝试重试
-            int retries = 0;
-            boolean interrupted = false;
-            while (retries < maxRetries && !interrupted) {
-                try {
-                    Thread.sleep(retryBackoffMs);
-                    // 刷新元数据 - 生产者重试，错误触发
-                    metadataManager.refreshMetadata(topic, true, true);
-                    System.out.printf("重试发送消息 (第%d次): topic=%s, partition=%d%n", 
-                        retries + 1, topic, partition);
-                    // 重试时直接发送，跳过缓存机制
-                    doSendPartitionBatch(topic, partition, batch);
-                    return; // 如果重试成功，直接返回
-                } catch (InterruptedException ie) {
-                    // 处理中断异常
-                    Thread.currentThread().interrupt();
-                    interrupted = true;
-                    System.err.println("发送线程被中断");
-                } catch (Exception retryEx) {
-                    retries++;
-                    System.err.printf("重试失败 (第%d次): topic=%s, partition=%d, 错误: %s%n", 
-                        retries, topic, partition, retryEx.getMessage());
-                    if (retries >= maxRetries) {
-                        System.err.println("批量发送失败，已达到最大重试次数: " + retryEx.getMessage());
-                    }
+            // 指标埋点: 批次发送异常
+            metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
+            
+            // 记录失败的消息延迟（用于监控失败率）
+            long errorTime = System.currentTimeMillis();
+            for (ProducerRecord record : batch) {
+                if (record.getQueueTimestamp() > 0) {
+                    long errorLatency = errorTime - record.getQueueTimestamp();
+                    metricsCollector.recordLatency("producer.message.error.latency", errorLatency);
                 }
             }
-        } finally {
-            long endTime = System.currentTimeMillis();
-            long totalLatency = endTime - startTime;
             
-            // 指标埋点: 记录批次发送延迟
-            metricsCollector.recordLatency("producer.batch.send.latency", totalLatency, labels);
+            throw e;
+        }
+    }
+    
+    /**
+     * 记录每条消息的精确延迟指标（不包含batch构建时间）
+     */
+    private void recordMessageLatencies(List<ProducerRecord> batch, long endTime) {
+        for (ProducerRecord record : batch) {
+            // 1. 端到端延迟：从入队到网络发送完成（不包含batch构建时间）
+            if (record.getQueueTimestamp() > 0) {
+                long endToEndLatency = endTime - record.getQueueTimestamp();
+                metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_MESSAGE_LATENCY, endToEndLatency);
+            }
             
-            // 修正：分别统计两种延迟
-            for (ProducerRecord record : batch) {
-                // 1. 真实端到端延迟：从消息创建到响应接收（包含队列等待时间）
-                if (record.getSendTimestamp() > 0) {
-                    long endToEndLatency = endTime - record.getSendTimestamp();
-                    metricsCollector.recordLatency("producer.end_to_end.latency", endToEndLatency);
-                }
-                
-                // 2. 网络发送延迟：从开始发送到响应接收（不包含队列等待）
-                metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SEND, totalLatency);
+            // 2. 队列等待延迟：从入队到网络发送开始（不包含batch构建时间）
+            if (record.getQueueTimestamp() > 0 && record.getSendStartTimestamp() > 0) {
+                long queueLatency = record.getSendStartTimestamp() - record.getQueueTimestamp();
+                metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_QUEUE_LATENCY, queueLatency);
             }
         }
     }
@@ -506,7 +485,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
      * @param batch 发送的消息批次
      * @param retryCount 重试次数
      */
-    private void handleProduceResponse(ByteBuffer response, String topic, int partition, 
+    private boolean handleProduceResponse(ByteBuffer response, String topic, int partition, 
                                      List<ProducerRecord> batch, int retryCount) {
         try {
             // 解析响应
@@ -516,14 +495,14 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             ProduceResponseParser.TopicResponse topicResponse = produceResponse.getTopicResponse(topic);
             if (topicResponse == null) {
                 System.err.printf("Producer] 响应中未找到topic: %s\n", topic);
-                return;
+                return false;
             }
             
             // 获取当前分区的响应
             ProduceResponseParser.PartitionResponse partitionResponse = topicResponse.getPartitionResponse(partition);
             if (partitionResponse == null) {
                 System.err.printf("[Producer] 响应中未找到分区: topic=%s, partition=%d\n", topic, partition);
-                return;
+                return false;
             }
             
             // 检查是否成功
@@ -549,6 +528,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 labels.put("partition", String.valueOf(partition));
                 metricsCollector.setGauge("producer.last_base_offset", partitionResponse.getBaseOffset(), labels);
                 
+                return true; // 成功
             } else {
                 // 失败的情况
                 short errorCode = partitionResponse.getErrorCode();
@@ -569,12 +549,12 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
                 boolean shouldRetry = shouldRetryForError(errorCode);
                 if (!shouldRetry) {
                     System.err.printf("[Producer] 错误不可重试: %s, 将抛出异常\n", errorDesc);
-                    throw new RuntimeException(String.format(
-                        "Produce失败，不可重试的错误: topic=%s, partition=%d, errorCode=%d[%s]", 
-                        topic, partition, errorCode, errorDesc));
+                    return false; // 不可重试，返回失败
                 } else if (retryCount > 0) {
                     System.out.printf("🔄 [Producer] 可重试错误: %s, 当前重试=%d\n", errorDesc, retryCount);
+                    return false; // 可重试，但需要重试，返回失败
                 }
+                return true; // 可重试，继续重试
             }
             
         } catch (Exception e) {
@@ -589,7 +569,7 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             metricsCollector.incrementCounter("producer.response.parse_error", parseErrorLabels);
             
             // 解析失败也抛出异常，让重试机制处理
-            throw new RuntimeException("Failed to parse ProduceResponse", e);
+            return false; // 解析失败，返回失败
         }
     }
     
@@ -722,12 +702,15 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             throw new IllegalStateException("Cannot send after the producer is closed");
         }
 
-        long startTime = System.currentTimeMillis();
+        long queueStartTime = System.currentTimeMillis();
         try {
             // 添加背压机制：如果队列已满超过90%，等待一段时间
             while (recordQueue.size() > recordQueue.remainingCapacity() * 9) {
                 Thread.sleep(1);
             }
+            
+            // 设置入队时间戳（这是实际的发送开始时间）
+            record.setQueueTimestamp(queueStartTime);
             
             // 使用超时版本的offer，避免无限等待
             if (!recordQueue.offer(record, lingerMs, TimeUnit.MILLISECONDS)) {
@@ -746,9 +729,9 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
             throw new RuntimeException("Interrupted while adding record to queue", e);
         } finally {
-            // 指标埋点: 记录入队延迟
-            long latency = System.currentTimeMillis() - startTime;
-            metricsCollector.recordLatency("producer.send.queue_latency", latency);
+            // 指标埋点: 记录入队延迟（入队操作本身的耗时）
+            long queueOperationLatency = System.currentTimeMillis() - queueStartTime;
+            metricsCollector.recordLatency("producer.send.queue_operation_latency", queueOperationLatency);
         }
     }
 
@@ -758,10 +741,13 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             throw new IllegalStateException("Cannot send after the producer is closed");
         }
 
-        long startTime = System.currentTimeMillis();
+        long syncSendStartTime = System.currentTimeMillis();
         try {
-        // 直接调用现有的doSend方法进行同步发送
-        doSend(record);
+            // 设置同步发送的时间戳
+            record.setQueueTimestamp(syncSendStartTime);
+            
+            // 直接调用现有的doSend方法进行同步发送
+            doSend(record);
             
             // 指标埋点: 同步发送成功
             metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
@@ -771,9 +757,9 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
             metricsCollector.incrementCounter(MetricsCollector.METRIC_PRODUCER_SEND_ERROR);
             throw e;
         } finally {
-            // 指标埋点: 记录同步发送总延迟
-            long latency = System.currentTimeMillis() - startTime;
-            metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SEND, latency);
+            // 指标埋点: 记录同步发送总延迟（使用独立指标）
+            long syncLatency = System.currentTimeMillis() - syncSendStartTime;
+            metricsCollector.recordLatency(MetricsCollector.METRIC_PRODUCER_SYNC_LATENCY, syncLatency);
         }
     }
 
@@ -868,36 +854,72 @@ public class KafkaLiteProducerImpl implements KafkaLiteProducer {
 
     // 获取生产者监控指标
     public double getProducerQPS() {
-        return metricsCollector.getQPS(MetricsCollector.METRIC_PRODUCER_SEND);
+        return metricsCollector.getQPS(MetricsCollector.METRIC_PRODUCER_SEND_SUCCESS);
     }
 
+    /**
+     * 获取生产者P99延迟 - 消息端到端延迟（最重要的指标）
+     * 注意：此延迟不包含batch构建和ProduceRequest构造时间，只包含：
+     * 1. 队列等待时间（从入队到开始网络发送）
+     * 2. 纯网络传输时间（sendAndReceive调用时间）
+     */
     public double getProducerP99Latency() {
-        return metricsCollector.getP99Latency(MetricsCollector.METRIC_PRODUCER_SEND);
+        return metricsCollector.getP99Latency(MetricsCollector.METRIC_PRODUCER_MESSAGE_LATENCY);
     }
     
     // 新增：扩展延迟指标
     public double getProducerP50Latency() {
-        return metricsCollector.getP50Latency(MetricsCollector.METRIC_PRODUCER_SEND);
+        return metricsCollector.getP50Latency(MetricsCollector.METRIC_PRODUCER_MESSAGE_LATENCY);
     }
     
     public double getProducerP95Latency() {
-        return metricsCollector.getP95Latency(MetricsCollector.METRIC_PRODUCER_SEND);
+        return metricsCollector.getP95Latency(MetricsCollector.METRIC_PRODUCER_MESSAGE_LATENCY);
     }
     
     public double getProducerP999Latency() {
-        return metricsCollector.getP999Latency(MetricsCollector.METRIC_PRODUCER_SEND);
+        return metricsCollector.getP999Latency(MetricsCollector.METRIC_PRODUCER_MESSAGE_LATENCY);
     }
     
     public double getProducerAvgLatency() {
-        return metricsCollector.getAverageLatency(MetricsCollector.METRIC_PRODUCER_SEND);
+        return metricsCollector.getAverageLatency(MetricsCollector.METRIC_PRODUCER_MESSAGE_LATENCY);
     }
     
     public double getProducerMaxLatency() {
-        return metricsCollector.getMaxLatency(MetricsCollector.METRIC_PRODUCER_SEND);
+        return metricsCollector.getMaxLatency(MetricsCollector.METRIC_PRODUCER_MESSAGE_LATENCY);
     }
     
     public double getProducerMinLatency() {
-        return metricsCollector.getMinLatency(MetricsCollector.METRIC_PRODUCER_SEND);
+        return metricsCollector.getMinLatency(MetricsCollector.METRIC_PRODUCER_MESSAGE_LATENCY);
+    }
+    
+    // 新增：分类延迟指标
+    
+    /**
+     * 获取网络发送延迟 - 纯网络传输时间（不含batch构建）
+     */
+    public double getProducerNetworkP99Latency() {
+        return metricsCollector.getP99Latency(MetricsCollector.METRIC_PRODUCER_NETWORK_LATENCY);
+    }
+    
+    /**
+     * 获取队列等待延迟 - 从入队到开始网络发送的等待时间
+     */
+    public double getProducerQueueP99Latency() {
+        return metricsCollector.getP99Latency(MetricsCollector.METRIC_PRODUCER_QUEUE_LATENCY);
+    }
+    
+    /**
+     * 获取批次发送延迟 - 整个网络发送过程的时间（不含batch构建）
+     */
+    public double getProducerBatchP99Latency() {
+        return metricsCollector.getP99Latency(MetricsCollector.METRIC_PRODUCER_BATCH_LATENCY);
+    }
+    
+    /**
+     * 获取同步发送延迟 - 同步发送API的总延迟
+     */
+    public double getProducerSyncP99Latency() {
+        return metricsCollector.getP99Latency(MetricsCollector.METRIC_PRODUCER_SYNC_LATENCY);
     }
     
     // 获取当前队列大小

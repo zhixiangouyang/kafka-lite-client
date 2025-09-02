@@ -442,4 +442,11 @@ public class MetricsCollector {
     public static final String METRIC_DNS_RESOLUTION = "dns.resolution";
     public static final String METRIC_DR_SWITCH = "dr.switch";
     public static final String METRIC_METADATA_REFRESH = "metadata.refresh";
+    
+    // 新增：精确的生产者延迟指标（不包含batch构建和request构造时间）
+    public static final String METRIC_PRODUCER_MESSAGE_LATENCY = "producer.message.latency";           // 单条消息延迟（从入队到网络发送完成）
+    public static final String METRIC_PRODUCER_BATCH_LATENCY = "producer.batch.latency";               // 批次网络发送延迟（不含构建时间）
+    public static final String METRIC_PRODUCER_QUEUE_LATENCY = "producer.queue.latency";               // 队列等待延迟（到网络发送开始）
+    public static final String METRIC_PRODUCER_NETWORK_LATENCY = "producer.network.latency";           // 纯网络传输延迟
+    public static final String METRIC_PRODUCER_SYNC_LATENCY = "producer.sync.latency";                 // 同步发送总延迟
 } 
